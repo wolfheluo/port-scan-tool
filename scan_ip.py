@@ -27,7 +27,8 @@ scan_ip.py — 單一 IP Port 風險自動化掃描（JSON 指令庫驅動版）
   - --dry-run：不連目標，逐一驗證 190 指令可執行性（binary + msf 模組載入）
 
 安全邊界：
-  - exploit 模組（java_rmi_server、cve_2021_38647_omigod）一律 SKIP，永不執行
+  - exploit 模組（java_rmi_server、cve_2021_38647_omigod）預設會執行；
+    可用 --no-exploit 改為一律 SKIP
   - 只做觀測，不對目標寫入/刪除/修改
 """
 
@@ -134,6 +135,8 @@ KNOWN_FIXES = [
     # msf 模組不存在 → 改用實際存在的模組
     (r"auxiliary/scanner/http/ajp_requests", "auxiliary/admin/http/tomcat_ghostcat"),
     (r"auxiliary/scanner/http/webmin_login", "auxiliary/admin/webmin/file_disclosure"),
+    # omigod 原文缺 exploit/ 前綴 → 補上（預設會執行 exploit 模組）
+    (r"linux/misc/cve_2021_38647_omigod", "exploit/linux/misc/cve_2021_38647_omigod"),
     # nc 舊式旗標 → -w 5（不用 -n：hostname 目標會被 -n 擋下 Can't parse）
     (r"nc -nvc ", "nc -w 5 "),
     (r"nc -ncv ", "nc -w 5 "),
@@ -169,6 +172,7 @@ KNOWN_FIXES = [
 MSF_RETRY_FIXES = [
     lambda m: m,
     lambda m: "auxiliary/" + m if not m.startswith(("auxiliary/", "exploit/")) else m,
+    lambda m: "exploit/" + m if not m.startswith(("auxiliary/", "exploit/")) else m,
     lambda m: m.replace("auxiliary/sanner/", "auxiliary/scanner/"),
     lambda m: m.replace("scanner/mysql/mssql_login", "scanner/mssql/mssql_login"),
     lambda m: m.replace("scanner/sip/option", "scanner/sip/options"),
@@ -482,15 +486,17 @@ def build_commands_for_port(port, groups, cfg, gentle):
         for idx, raw_cmd in enumerate(g["commands"]):
             cmd = fix_command(raw_cmd)
             mod = parse_msf_module(cmd)
-            # exploit → SKIP
+            # exploit 模組：預設執行；--no-exploit 時 SKIP
             if mod and is_exploit_module(mod):
-                tests.append({
-                    "name": "msf-%s" % mod.rsplit("/", 1)[-1], "kind": "scan",
-                    "argv": None, "cmd": "", "mod": mod, "src": raw_cmd,
-                    "risk": [], "warn": [], "timeout": 60,
-                    "skip_reason": "exploit 模組不執行（安全邊界）",
-                })
-                continue
+                if cfg.get("no_exploit"):
+                    tests.append({
+                        "name": "msf-%s" % mod.rsplit("/", 1)[-1], "kind": "scan",
+                        "argv": None, "cmd": "", "mod": mod, "src": raw_cmd,
+                        "risk": [], "warn": [], "timeout": 60,
+                        "skip_reason": "exploit 模組不執行（--no-exploit）",
+                    })
+                    continue
+                # 執行模式：當一般模組處理（timeout 覆寫在 classify_kind 之後）
             # 非指令（telnet 交談文字等）→ 跳過（HTTP TRACE 另以 curl 取代）
             if cmd.startswith(("TRACE ", "Host:", "(", "修補:")) or cmd == "":
                 continue
@@ -514,6 +520,9 @@ def build_commands_for_port(port, groups, cfg, gentle):
             needs_domain = "{DOMAIN}" in raw_cmd
             kind = classify_kind(cmd, mod)
             timeout = TIMEOUTS.get(kind, 60)
+            if mod and is_exploit_module(mod):
+                kind = "scan"  # exploit 模組預設執行，給予較長 timeout
+                timeout = max(timeout, 120)
             if bin0 in INTERACTIVE_BINS:
                 kind = "interactive"
                 timeout = TIMEOUTS["interactive"]
@@ -1179,7 +1188,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
             if m2 in tried or m2 == test["mod"]:
                 continue
             tried.append(m2)
-            if is_exploit_module(m2):
+            if is_exploit_module(m2) and cfg.get("no_exploit"):
                 continue
             log_line(log_path, "[%s][%s] 模組載入失敗，重試 %s" % (port, name, m2))
             argv2 = msf_to_argv(m2, ip, port, cfg["user"], cfg["password"],
@@ -1247,7 +1256,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
 # ---------------------------------------------------------------------------
 # dry-run：驗證 190 指令可執行性（不連目標）
 # ---------------------------------------------------------------------------
-def dry_run(table_path, out_dir):
+def dry_run(table_path, out_dir, no_exploit=False):
     data, groups = load_library(table_path)
     log_path = out_dir / "dryrun.log"
     lines = []
@@ -1263,9 +1272,9 @@ def dry_run(table_path, out_dir):
             cmd = fix_command(raw_cmd)
             mod = parse_msf_module(cmd)
             if mod:
-                if is_exploit_module(mod):
+                if is_exploit_module(mod) and no_exploit:
                     skip += 1
-                    lines.append("[SKIP] exploit 不執行: %s" % mod)
+                    lines.append("[SKIP] exploit 不執行（--no-exploit）: %s" % mod)
                     continue
                 mods.append(mod)
                 continue
@@ -1350,6 +1359,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="不連目標，驗證指令庫可執行性")
     ap.add_argument("--install-tools", action="store_true", help="安裝所有缺失的外部工具後結束（需要 root/sudo）")
     ap.add_argument("--check-tools", action="store_true", help="只列出缺失的外部工具，不安裝")
+    ap.add_argument("--no-exploit", action="store_true", help="不執行 exploit 模組（預設會執行）")
     args = ap.parse_args()
 
     # 工具安裝模式：不需要指令庫/目標
@@ -1369,7 +1379,7 @@ def main():
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         dry_dir = out_root / ("%s_dryrun" % ts)
         dry_dir.mkdir(parents=True, exist_ok=True)
-        ok = dry_run(args.table, dry_dir)
+        ok = dry_run(args.table, dry_dir, args.no_exploit)
         sys.exit(0 if ok else 1)
 
     if not args.ip:
@@ -1417,8 +1427,9 @@ def main():
     log_path = out_dir / "scan.log"
     log_line(log_path, "=== Port 風險掃描開始 目標=%s 時間=%s ===" % (ip, datetime.now().isoformat(timespec="seconds")))
     log_line(log_path, "指令庫: %s（%d port 群組）" % (args.table, len(groups)))
-    log_line(log_path, "模式: %s | 帳號: %s | 密碼: %s" % (
+    log_line(log_path, "模式: %s | exploit: %s | 帳號: %s | 密碼: %s" % (
         "溫和（單一帳密 %s/%s）" % (args.user, args.password) if gentle else "爆破（完整字典）",
+        "跳過（--no-exploit）" if args.no_exploit else "執行",
         os.path.basename(userlist), os.path.basename(wordlist)))
 
     # 1. 前置檢查
@@ -1436,7 +1447,7 @@ def main():
     cfg = {
         "wordlist": wordlist, "userlist": userlist, "timeout": args.timeout,
         "gentle": gentle, "user": args.user, "password": args.password,
-        "path": "/",
+        "path": "/", "no_exploit": args.no_exploit,
     }
     if gentle:
         # 溫和模式：字典指向單行臨時檔（爆破指令只試一組帳密）

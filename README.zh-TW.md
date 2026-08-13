@@ -50,6 +50,7 @@ python3 scan_ip.py <IP> [options]
 | `--dry-run` | off | 不連目標，驗證指令庫可執行性。 |
 | `--check-tools` | off | 列出缺失的外部工具（不安裝）。 |
 | `--install-tools` | off | 安裝所有缺失的外部工具後結束（需 root/sudo；apt + mongosh/odat/testssl.sh 特殊來源）。 |
+| `--no-exploit` | off | 不執行 exploit 模組（預設會執行）。 |
 
 ### 模式
 
@@ -63,8 +64,8 @@ FTP (21)、SSH (22)、Telnet (23)、SMTP (25)、DNS (53)、TFTP (69)、HTTP (80)
 
 ## 安全邊界
 
-- **exploit 模組永不執行。** 如 `exploit/multi/misc/java_rmi_server`、`linux/misc/cve_2021_38647_omigod` 這類模組會被分類為 exploit 並以 `SKIP` 跳過。
-- 工具絕不寫入、修改或刪除目標上的任何東西；純粹觀測。
+- **exploit 模組預設會執行**（`java_rmi_server`、`cve_2021_38647_omigod` 等）。加 `--no-exploit` 可改為一律 `SKIP`。
+- 觀測型測試絕不寫入、修改或刪除目標上的任何東西（執行 exploit 模組時的影響屬模組本身行為）。
 - 爆破預設為單一帳密；完整字典需明確加 `--brute`。
 - GUI 工具（`vncviewer`、`xfreerdp`）在 headless 環境自動 SKIP。
 

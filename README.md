@@ -71,6 +71,7 @@ python3 scan_ip.py <IP> [options]
 | `--dry-run` | off | Validate all library commands are executable without targeting a host. |
 | `--check-tools` | off | List missing external tools (no install). |
 | `--install-tools` | off | Install all missing external tools then exit (needs root/sudo; apt + special sources for mongosh/odat/testssl.sh). |
+| `--no-exploit` | off | Skip exploit modules (default: they are executed). |
 
 ### Modes
 
@@ -104,12 +105,12 @@ Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
 
 ## Safety Boundaries
 
-- **Exploit modules are never executed.** Modules such as
-  `exploit/multi/misc/java_rmi_server` and
-  `linux/misc/cve_2021_38647_omigod` are classified as exploit and skipped
-  with a `SKIP` result.
-- The tool never writes to, modifies, or deletes anything on the target; it
-  is purely observational.
+- **Exploit modules are executed by default** (`java_rmi_server`,
+  `cve_2021_38647_omigod`, ...). Pass `--no-exploit` to skip them with a
+  `SKIP` result.
+- The tool never writes to, modifies, or deletes anything on the target
+  (except what the exploit module itself does when executed); observational
+  tests are read-only.
 - Brute-force is single-credential by default; full wordlists require an
   explicit `--brute` flag.
 - GUI tools (`vncviewer`, `xfreerdp`) are skipped in headless environments.
