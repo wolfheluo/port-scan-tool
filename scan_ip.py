@@ -743,8 +743,8 @@ def install_tools_main(check_only=False):
 # 前置檢查
 # ---------------------------------------------------------------------------
 def preflight(no_install, log_path):
-    missing = [b for b in TOOL_PACKAGES if shutil.which(b) is None]
-    missing += [b for b in NO_APT_TOOLS if shutil.which(b) is None]
+    missing = [b for b in TOOL_PACKAGES if not _is_tool_installed(b)]
+    missing += [b for b in NO_APT_TOOLS if not _is_tool_installed(b)]
     # 無 apt 套件的工具：缺則 SKIP（不嘗試安裝）
     no_apt_missing = sorted(set(missing) & NO_APT_TOOLS)
     for b in no_apt_missing:
@@ -1391,8 +1391,21 @@ def main():
         sys.exit(0 if ok else 1)
 
     if not args.ip:
-        print("錯誤: 需要目標 IP（或使用 --dry-run）")
-        sys.exit(1)
+        if sys.stdin.isatty():
+            # 互動模式：提示輸入目標
+            try:
+                args.ip = input("請輸入目標 IP 或域名: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n已取消")
+                sys.exit(1)
+        else:
+            # 非互動：支援管線輸入（echo target | python3 scan_ip.py）
+            line = sys.stdin.readline().strip()
+            if line:
+                args.ip = line
+        if not args.ip:
+            print("錯誤: 需要目標 IP（或使用 --dry-run）")
+            sys.exit(1)
 
     ip = args.ip
     # 容忍誤貼完整 URL（剝離 scheme 與路徑，避免 nmap 解析失敗白跑）

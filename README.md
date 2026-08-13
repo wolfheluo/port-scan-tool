@@ -50,6 +50,9 @@ trail for subsequent offline analysis.
 python3 scan_ip.py <IP> [options]
 ```
 
+`<IP>` 可省略：互動模式下會提示輸入（也可用管線餵入：
+`echo example.com | python3 scan_ip.py`）。
+
 | Option | Default | Description |
 |---|---|---|
 | `--wordlist FILE` | `wordlist.txt` | Password list for brute-force tests (`--brute` mode). |
