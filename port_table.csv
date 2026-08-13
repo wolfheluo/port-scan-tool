@@ -1,0 +1,81 @@
+PORT,說明,測試指令
+21,FTP（File Transfer Protocol）控制通道的預設連接埠，主要用來建立連線、驗證帳號密碼，以及傳送 FTP 指令。,"1. FTP匿名登入測試：使用者名稱輸入「anonymous」，密碼不用提供(直接按enter)，若登入成功代表允許匿名登入，可用ls列舉檔案並截圖。
+2. hydra -L <帳號字典檔> -P <密碼字典檔> ftp://<IP> -t 3 -v"
+22,SSH是一種網路協定，它提供了在潛在不安全的網路上安全存取系統或伺服器的方式。它允許您透過加密保護客戶端和伺服器之間傳輸的數據，從而安全地登錄和管理遠端機器。,"hydra -v -V -u -l root -P {Big_Passwordlist} -t 1 -u <IP> ssh
+1.nmap -sV -p 22 --script ssh2-enum-algos <IP>
+2.msf> use auxiliary/scanner/ssh/ssh_login"
+25,用於電子郵件發送的協定，它使電子郵件能夠在不同的郵件伺服器之間進行傳遞和路由。,"1.nmap -p25 --script smtp-commands <IP>
+2.nmap --script=smtp-commands,smtp-enum-users,smtp-vuln-cve2010-4344,smtp-vuln-cve2011-1720,smtp-vuln-cve2011-1764 -p 25 {IP}
+3.nc -nvc <IP>
+4.msf6> use auxiliary/scanner/smtp/smtp_enum
+5.smtp-user-enum -M VRFY -U <帳號清單檔> -t <IP>"
+53,DNS（Domain Name System）的預設通訊埠，用於域名解析，將人類可讀的域名轉換為IP地址，實現網際網路上的資源定位。,"dnsrecon -d <target> -a
+nmap --script dns-nsid <target> -p 53"
+110,用於郵件服務中的POP3（Post Office Protocol version 3），負責接收郵件客戶端的請求，提供用戶檢索和下載郵件的通道。,"1.nc -ncv <ip> <port>
+2.msf6> use auxiliary/sanner/pop3/pop3_login"
+135,Windows操作系統中的DCE/RPC服務點，用於處理分散式計算環境中的遠端程序呼叫，像是系統內不同部分之間的通訊樞紐。,"1.nmap --script=msrpc-enum <IP>
+2.msf6>use auxiliary/scanner/dcerpc/management
+3.msf6>use auxiliary/scanner/dcerpc/hidden"
+139,用於Windows檔案和印表機分享的NetBIOS Session服務通訊埠，實現在區域網路內共享檔案和資源的功能，像是一個共享之門。,nbtscan-unixwiz -n <IP>
+443,HTTPS的預設通訊埠，用於安全瀏覽器和網站之間的加密數據傳輸，確保用戶在網際網路上的隱私和安全。,"1.sslscan <ip>or<ip:port>
+2.nmap -p 443,8443 -Pn --script ssl-cert  <IP> ->SSL憑證資訊
+3.nmap -sV --script ssl-enum-ciphers -p 443 <ip>"
+445,SMB(Server Message Block)通訊協定使用的埠，負責檔案共享與網路資源存取。,"1.nmap --script smb-os-discovery,smb-protocols <ip>
+2.smbclient -N -L //<IP>
+3.smbmap -H <IP>
+關於第1項，經3次循環實測，若使用smb-os-discovery,smb-protocols，可能會偵測不到「NT LM 0.12 (SMBv1) [dangerous, but default]」，原因未知，可考慮單獨執行smb-protocols。"
+RPC PORT,Remote Procedure Call (RPC) 使用動態指定的 port，通常在範圍 49152 到 65535 之間。RPC允許程式在網路上的不同系統上執行程序，實現遠端過程調用。,"1.rpcclient -U """" -N <IP>
+2.impacket工具
+rpcdump.py user:passwd@<IP>"
+1433,Microsoft SQL Server的預設通訊埠，用於處理資料庫連接和查詢，允許應用程式與SQL Server之間的可靠通訊。,msf6> use auxiliary/scanner/mysql/mssql_login
+1521,Oracle資料庫的預設通訊埠，負責處理資料庫連接和查詢，讓應用程式能夠與Oracle資料庫進行可靠的通訊。,msf> use auxiliary/scanner/oracle/sid_enum
+1723,PPTP（點對點隧道協定）的預設通訊埠，用於建立虛擬私人網路（VPN）連接，實現安全的遠端存取和通信。,thc-pptp-bruter -u <user> -w <字典檔> <ip>
+3306,MySQL 資料庫服務預設使用的通訊埠，負責資料庫連線與資料查詢，常用於應用程式與後端系統存取資料庫。,mysql -h <IP> -u <login name> -p -P 3306
+3389,"Windows遠端桌面（Remote Desktop Protocol, RDP）的預設通訊埠，允許遠端存取並控制主機。","1.nmap --script ssl-enum-ciphers -p 3389 <IP>
+2.hydra -t 4 -L [帳號字典檔] -P [密碼字典檔] rdp://<目標IP>:3389
+3.hydra -t 4 -l administrator -P [密碼字典檔] rdp://<目標IP>:3389"
+5060,用於Session Initiation Protocol（SIP）通信的預設通訊埠，負責建立、修改和解除多媒體會話。,msf> use auxiliary/scanner/sip/option
+5900,VNC是一種遠端桌面協議，允許使用者透過網路連接到遠端電腦，並在本地電腦上控制和操作遠端電腦的桌面。5800和5900通訊埠分別用於VNC協議的HTTP和非加密版本。 ,"1.nmap --script=vnc-info,vnc-title -p 5900 <IP>
+2.msf6> use auxiliary/scanner/vnc/vnc_none_auth
+3. msf > use auxiliary/scanner/vnc/vnc_login
+項目3可將字典檔置換為簡易字典"
+5985,Windows遠端管理（WinRM）的預設通訊埠，它基於WS-Management協議，允許系統管理員透過PowerShell或遠端命令工具，連接和管理遠端主機。,msf6 > use linux/misc/cve_2021_38647_omigod
+"80,443",ASP.NET debugging enabled,nmap --script http-aspnet-debug --script-args http-aspnet-debug.path=/path <target> -p 443
+6379,Redis服務的預設埠，負責客戶端與Redis伺服器之間的資料存取與快取操作。,redis-cli -h <IP> -p 6379
+9080,一個開源的Java應用程式伺服器，提供穩定可靠的環境運行企業級應用。,msf> use scanner/http/jboss_vulnscan
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+HTTP TRACE / TRACK Methods Allowed,"HTTP TRACE/TRAC 通常用於 Debug，如何驗證系統是否真的有開啟 TRACE/TRACK 之功能，可使用telnet 網頁所在 ip 80 port：
+","telnet <IP> 80
+之後輸入
+TRACE / HTTP/1.1
+Host: localhost.localdomain
+再連續按兩下 Enter
+若系統有回應：
+HTTP/1.1 200 OK
+…
+表示確實HTTP TRACE / TRACK Methods Allowed。
+那該如何關閉呢？可在 Apache 之設定檔 httpd.conf 加上 TraceEnable off 即可。
+vi /etc/httpd/conf/httpd.conf
+加上字串：
+TraceEnable off
+
+接著重新啟動 Apache 即可.
+service httpd restart"
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+待確認,,
+111,Portmapper 是一項用來將網路服務埠對應到 RPC（遠端程序呼叫）程式號碼的服務。,
+2049,NFS（網路檔案系統）是一種客戶端/伺服器系統，讓使用者可以像存取本地目錄中的檔案一樣，無縫地存取網路上的檔案。,
+21,文件傳輸協定 (FTP) 是伺服器和用戶端之間透過電腦網路傳輸檔案的標準協定。,

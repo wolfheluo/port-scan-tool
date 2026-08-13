@@ -1,0 +1,16 @@
+root
+admin
+administrator
+test
+user
+guest
+backup
+operator
+oracle
+sa
+sysadmin
+ftp
+apache
+tomcat
+jboss
+postgres

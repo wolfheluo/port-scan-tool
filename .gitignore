@@ -1,0 +1,13 @@
+# 執行產物
+runs/
+__pycache__/
+*.pyc
+*.log
+
+# 系統檔案
+.DS_Store
+Thumbs.db
+
+# 敏感/暫存
+*.token
+*.jwt
