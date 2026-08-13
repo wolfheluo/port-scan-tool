@@ -36,6 +36,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -735,7 +736,10 @@ def nmap_sv_unknown(ip, ports, services, log_path):
 # Python fallback（工具缺失時的同功能實作，零依賴）
 # ---------------------------------------------------------------------------
 def fb_redis_ping(ip, port, cfg):
-    s = socket.create_connection((ip, port), timeout=5)
+    try:
+        s = socket.create_connection((ip, port), timeout=5)
+    except OSError as e:
+        return "連線失敗: %s" % e, 1
     s.settimeout(5)
     s.sendall(b"PING\r\n")
     data = b""
@@ -755,31 +759,61 @@ def fb_redis_ping(ip, port, cfg):
 
 def fb_smtp_user_enum(ip, port, cfg):
     users = [ln.strip() for ln in open(cfg["userlist"], encoding="utf-8") if ln.strip()]
-    s = socket.create_connection((ip, port), timeout=5)
+    try:
+        s = socket.create_connection((ip, port), timeout=5)
+    except OSError as e:
+        return "連線失敗: %s" % e, 1
     s.settimeout(8)
     f = s.makefile("rwb")
-    banner = f.readline().decode(errors="replace")
-    f.write(b"EHLO scan.local\r\n")
-    f.flush()
-    while True:
-        ln = f.readline()
-        if not ln or ln.startswith(b"250 "):
-            break
-    out = banner
-    for u in users:
-        f.write(("VRFY %s\r\n" % u).encode())
+    out = ""
+    try:
+        banner = f.readline().decode(errors="replace")
+        f.write(b"EHLO scan.local\r\n")
         f.flush()
+        while True:
+            ln = f.readline()
+            if not ln or ln.startswith(b"250 "):
+                break
+        out = banner
+        for u in users:
+            f.write(("VRFY %s\r\n" % u).encode())
+            f.flush()
+            try:
+                out += f.readline().decode(errors="replace")
+            except socket.timeout:
+                out += "(timeout)\n"
+        f.write(b"QUIT\r\n")
+        f.flush()
+    except OSError as e:
+        out += "(連線中斷: %s)\n" % e
+    finally:
         try:
-            out += f.readline().decode(errors="replace")
-        except socket.timeout:
-            out += "(timeout)\n"
-    f.write(b"QUIT\r\n")
-    f.flush()
-    s.close()
+            s.close()
+        except OSError:
+            pass
     return out, 0
 
 
 FALLBACK_BIN = {"redis-cli": fb_redis_ping, "smtp-user-enum": fb_smtp_user_enum}
+
+
+def _killpg(proc):
+    """殺掉整個 process group（start_new_session=True 的 Popen 其 pid 即 pgid）。"""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _safe_run(ip, port, test, cfg, missing_bins, out_dir, log_path):
+    """run_one 的頂層兜底：任何未預期例外轉成 FAIL 結果，不讓整個掃描中止。"""
+    try:
+        return run_one(ip, port, test, cfg, missing_bins, out_dir, log_path)
+    except Exception as e:
+        log_line(log_path, "[%s][%s] 未預期例外: %r" % (port, test["name"], e))
+        return {"port": port, "test": test["name"], "kind": test.get("kind", "detect"),
+                "status": "FAIL", "summary": "未預期例外: %s" % e, "raw": "",
+                "duration": 0, "cmd": test.get("cmd", "")}
 
 
 # ---------------------------------------------------------------------------
@@ -844,9 +878,12 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
             except socket.gaierror:
                 pass
         rendered = cmd
-        repl = {"{IP}": ip, "{PORT}": str(port), "{DOMAIN}": domain, "{USER}": cfg["user"],
-                "{PASSWORD}": cfg["password"], "{USERLIST}": cfg["userlist"],
-                "{PASSWORDS}": cfg["wordlist"], "{PATH}": cfg.get("path", "/")}
+        # 注入防護：所有插值一律 shell 跳脫（bash -c 與 shlex.split 兩路皆安全）
+        repl = {"{IP}": shlex.quote(ip), "{PORT}": str(port), "{DOMAIN}": shlex.quote(domain),
+                "{USER}": shlex.quote(cfg["user"]), "{PASSWORD}": shlex.quote(cfg["password"]),
+                "{USERLIST}": shlex.quote(cfg["userlist"]),
+                "{PASSWORDS}": shlex.quote(cfg["wordlist"]),
+                "{PATH}": shlex.quote(cfg.get("path", "/"))}
         for k, v in repl.items():
             rendered = rendered.replace(k, v)
         bin0 = rendered.split()[0].split("/")[-1] if rendered.split() else ""
@@ -860,9 +897,12 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
         else:
             try:
                 argv = shlex.split(rendered)
-            except ValueError:
-                argv = ["bash", "-c", rendered]
-                shell_wrap = True
+            except ValueError as e:
+                # 插值已 quote 仍解析失敗 → 指令庫資料本身有未閉合引號，SKIP 而非升級成 shell 執行
+                log_line(log_path, "[%s][%s] SKIP: 指令無法解析（%s）" % (port, name, e))
+                return {"port": port, "test": name, "kind": test["kind"], "status": "SKIP",
+                        "summary": "指令無法解析: %s" % e, "raw": "", "duration": time.time() - t0,
+                        "cmd": cmd}
         src_display = test["src"]
 
     # docker / 非 root 環境（無 raw socket）：nmap 指令自動補 --unprivileged
@@ -900,19 +940,22 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
             out, rc = FALLBACK_BIN[bin0](ip, port, cfg)
         else:
             p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 text=True, errors="replace",
+                                 text=True, errors="replace", start_new_session=True,
                                  env={**os.environ, "TERM": "dumb"})
             try:
                 out, err = p.communicate(timeout=timeout)
                 rc = p.returncode
             except subprocess.TimeoutExpired:
-                p.kill()
+                _killpg(p)  # 殺整個 process group（含 bash -c 衍生的孫程序）
                 out, err = p.communicate()
                 timed_out = True
                 rc = p.returncode
     except FileNotFoundError:
         return {"port": port, "test": name, "kind": test["kind"], "status": "SKIP",
                 "summary": "工具不存在", "raw": "", "duration": time.time() - t0, "cmd": cmd_display}
+    except OSError as e:
+        return {"port": port, "test": name, "kind": test["kind"], "status": "FAIL",
+                "summary": "執行錯誤: %s" % e, "raw": "", "duration": time.time() - t0, "cmd": cmd_display}
 
     dur = time.time() - t0
     combined = out + "\n" + err
@@ -932,14 +975,17 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
                                 cfg["userlist"], cfg["wordlist"], gentle)
             try:
                 p = subprocess.Popen(argv2, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     text=True, errors="replace",
+                                     text=True, errors="replace", start_new_session=True,
                                      env={**os.environ, "TERM": "dumb"})
                 out, err = p.communicate(timeout=timeout)
                 rc = p.returncode
             except subprocess.TimeoutExpired:
-                p.kill()
+                _killpg(p)
                 out, err = p.communicate()
                 timed_out = True
+            except FileNotFoundError:
+                log_line(log_path, "[%s][%s] 模組重試失敗：工具不存在" % (port, name))
+                break
             combined = out + "\n" + err
             if not re.search(r"failed to load module|is not a valid module|unknown module", combined, re.I):
                 log_line(log_path, "[%s][%s] 重試成功 → 模組 %s" % (port, name, m2))
@@ -1112,6 +1158,10 @@ def main():
     m = re.match(r"^(?:[a-zA-Z][a-zA-Z0-9+.\-]*://)?([^/\s]+)", ip)
     if m:
         ip = m.group(1)
+    # 注入防護：目標僅允許 IP/主機名字元集（堵住 bash -c / msf -x 的注入鏈）
+    if not re.match(r"^[A-Za-z0-9._\-:\[\]]+$", ip):
+        print("錯誤: 目標 %r 含非法字元（僅允許 IP 或主機名）" % ip)
+        sys.exit(1)
     args.ip = ip
     wordlist = os.path.abspath(args.wordlist)
     userlist = os.path.abspath(args.userlist)
@@ -1190,7 +1240,7 @@ def main():
     # 4. 執行
     results = []
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
-        futs = {ex.submit(run_one, ip, port, t, cfg, missing_bins, out_dir, log_path): (port, t["name"])
+        futs = {ex.submit(_safe_run, ip, port, t, cfg, missing_bins, out_dir, log_path): (port, t["name"])
                 for port, t in jobs}
         try:
             for fut in as_completed(futs):
