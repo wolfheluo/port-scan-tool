@@ -84,10 +84,8 @@
 - 問題: `with ThreadPoolExecutor` 退出時 `shutdown(wait=True)` 會等所有 in-flight 測試跑完 (單個最長 300s), 中斷既不即時; 已跑完但未被 `as_completed` 收集的結果也不進 results.json。
 - 建議: except KeyboardInterrupt 內 `ex.shutdown(cancel_futures=True, wait=False)`。
 
-### L8 — top1000.txt 無防護 open
-- 位置: `scan_ports()` L622
-- 問題: 檔案缺失即 FileNotFoundError 整個程式崩潰, 即使 nmap 可用、根本用不到該 fallback 清單。
-- 建議: `is_file()` 檢查或 try/except 記警告。
+### L8 — top1000.txt 無防護 open（已移除）
+- 原問題: 檔案缺失直接崩潰。**已解決 — 檔案本身已刪除** (主掃描用 nmap 內建 top-1000; fallback 改為表格+web 埠, 不再需要自備清單)。
 
 ### L9 — fb_* fallback 未捕 socket 錯誤 → 整個掃描崩潰
 - 位置: `fb_redis_ping` / `fb_smtp_user_enum` + main `fut.result()`
@@ -110,7 +108,7 @@
 | N3 | 3306 | risk 含 `^\d+\.\d+` 會把版本 banner 判 RISK, 與「banner 屬 WARN」語義矛盾 → 移 warn |
 | N4 | run_one | 每個含 {DOMAIN} 的測試各自做 PTR 反解無快取 → main 層快取一次 |
 | N5 | 993/995 | Dovecot 不主動關連線, 原本掛 60s (已加 timeout 12 緩解); 自家服務可考慮 `s_client -brief` |
-| N6 | top1000.txt | 已降級為 fallback 專用, 建議註明或刪除避免誤解 |
+| N6 | top1000.txt | ✅ 已刪除 — fallback 改用表格+web 埠 |
 | N7 | 目標確認 | TTY 等待 Enter 是刻意設計, 建議同時印出預估測試數與時間, 避免誤以為卡死 |
 
 ---
@@ -127,7 +125,7 @@
 | **L5 200 OK 假陽性** | 正常網站每條 HTTP 測試必 RISK | ✅ 已修 — 200 OK 從 GENERIC/80/8080 risk 移入 warn |
 | **L6 bash 包裝 bin0** | 管線內真實 binary 不在缺工具檢查範圍 | ✅ 已修 — _missing_bin_in_cmd 檢查管線內所有 binary |
 | **L7 Ctrl-C 即時性** | 中斷等待 in-flight 測試、結果殘缺 | ✅ 已修 — shutdown(cancel_futures=True, wait=False) + 收集已完成結果 |
-| **L8 top1000 防護** | 檔案缺失直接崩潰 | ✅ 已修 — is_file 檢查, 缺失僅警告 |
+| **L8 top1000 防護** | 檔案缺失直接崩潰 | ✅ 已解決 — top1000.txt 已刪除（fallback 改表格+web 埠） |
 | **L9 fallback 崩潰** | fb_* 未捕 socket 錯誤 → 全掃描中止 | ✅ 已修 — fb_* 內部捕 OSError + run_one 捕 OSError + _safe_run 頂層兜底 |
 | **L10 rsync @** | 裸 @ 接近隨機命中 | ✅ 已修 — 改 \S+@\S+ |
 | 溫和模式帳密互換 | hydra -L/-P、msf USER_FILE/PASS_FILE 全裝反 | ✅ 已修 + 單元測試 |

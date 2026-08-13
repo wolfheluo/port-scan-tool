@@ -818,26 +818,8 @@ def scan_ports(ip, log_path, full_port, groups):
                 table_ports.add(int(piece))
     table_ports |= WEB_PORTS
 
-    # top1000.txt：僅作 nmap 不可用時的 Python connect fallback 埠清單
-    fallback_ports = set()
-    bad_tokens = []
-    top1000 = BASE / "top1000.txt"
-    if not top1000.is_file():
-        log_line(log_path, "警告: 缺少 %s（僅影響 nmap 不可用時的 fallback 掃描）" % top1000)
-    else:
-        with open(top1000, encoding="utf-8") as f:
-            for chunk in f:
-                for x in chunk.split(","):
-                    x = x.strip()
-                    if not x:
-                        continue
-                    if x.isdigit() and 0 <= int(x) <= 65535:
-                        fallback_ports.add(int(x))
-                    else:
-                        bad_tokens.append(x)
-        if bad_tokens:
-            log_line(log_path, "警告: top1000.txt 含無效 port token（已忽略）: %s" % ", ".join(bad_tokens[:5]))
-    fallback_ports |= table_ports
+    # fallback 埠清單 = 表格 + web 埠（nmap 故障時的 Python connect 掃描用）
+    fallback_ports = set(table_ports)
 
     udp_ports = set()
     for key, g in groups.items():
@@ -1363,7 +1345,7 @@ def main():
     ap.add_argument("--brute", action="store_true", help="爆破類指令載入完整字典（預設僅單一帳密溫和嘗試）")
     ap.add_argument("--user", default="admin", help="溫和模式單一帳號（預設 admin）")
     ap.add_argument("--password", default="password", help="溫和模式單一密碼（預設 password）")
-    ap.add_argument("--full-port", action="store_true", help="TCP 全埠掃描 -p-（預設 top1000+表格聯集）")
+    ap.add_argument("--full-port", action="store_true", help="TCP 全埠掃描 -p-（預設 nmap top-1000 + 表格埠）")
     ap.add_argument("--table", default=None, help="JSON 指令庫路徑（預設依序找 repo 目錄或 /root 下的 common_ports_test_commands.json）")
     ap.add_argument("--dry-run", action="store_true", help="不連目標，驗證指令庫可執行性")
     ap.add_argument("--install-tools", action="store_true", help="安裝所有缺失的外部工具後結束（需要 root/sudo）")

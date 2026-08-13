@@ -64,7 +64,7 @@ python3 scan_ip.py <IP> [options]
 | `--brute` | off | Full-wordlist brute force (default: single credential pair). |
 | `--user U` | `admin` | Single username for gentle-mode brute attempts. |
 | `--password P` | `password` | Single password for gentle-mode brute attempts. |
-| `--full-port` | off | Full TCP scan `-p-` (default: top1000+table union). |
+| `--full-port` | off | Full TCP scan `-p-` (default: nmap top-1000 + table/web union). |
 | `--table FILE` | auto | JSON command library path (default: repo dir, then `/root/common_ports_test_commands.json`). |
 | `--dry-run` | off | Validate all library commands are executable without targeting a host. |
 | `--check-tools` | off | List missing external tools (no install). |
@@ -132,8 +132,6 @@ Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
   close the connection after `-ERR` (waits for connection close); real POP3
   servers close the connection on auth failure, so this is a harness-only
   limitation.
-- `top1000.txt` corrupt token (`282116379` — two ports merged without a
-  separator) has been split into `28211, 6379`.
 
 ## Dependencies
 
