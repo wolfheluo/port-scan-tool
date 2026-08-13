@@ -50,6 +50,10 @@ from xml.etree import ElementTree
 BASE = Path(__file__).resolve().parent
 RUNS = BASE / "runs"
 
+# sudo 的 secure_path 常缺 /usr/local/bin（mongosh/odat/testssl 安裝處）
+# → 啟動時自行補上，否則 sudo 跑掃描時這些工具會被誤判缺失
+os.environ["PATH"] = "/usr/local/bin:" + os.environ.get("PATH", "")
+
 
 def resolve_table(explicit):
     """--table 未指定時依序尋找: repo 目錄 → /root。回傳絕對路徑或 None。"""

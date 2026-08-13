@@ -35,6 +35,10 @@ BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE))
 import scan_ip  # 重用 TOOL_PACKAGES / NO_APT_TOOLS（工具 → apt 套件對照）
 
+# sudo 的 secure_path 常缺 /usr/local/bin（本腳本的安裝位置）
+# → 啟動時自行補上，否則安裝後 which() 看不到而誤報 FAIL
+os.environ["PATH"] = "/usr/local/bin:" + os.environ.get("PATH", "")
+
 # TOOL_PACKAGES 標 None（Kali 預裝）但在 Kali/Debian 其實有套件的
 # 值為候選套件清單（依序嘗試，裝到第一個成功）
 KALI_APT = {
@@ -102,9 +106,24 @@ def http_get(url, timeout=60):
     return urllib.request.urlopen(req, timeout=timeout).read()
 
 
+# 安裝位置（/usr/local/bin 或 /opt），供 PATH 之外的最終判定
+INSTALL_PATHS = {
+    "mongosh": ("/usr/local/bin/mongosh",),
+    "odat": ("/opt/odat/odat.py",),
+    "odat.py": ("/opt/odat/odat.py",),
+    "testssl.sh": ("/opt/testssl.sh/testssl.sh",),
+}
+
+
+def is_installed(bin_name):
+    if shutil.which(bin_name):
+        return True
+    return any(os.access(p, os.X_OK) for p in INSTALL_PATHS.get(bin_name, ()))
+
+
 def missing_tools():
     bins = list(scan_ip.TOOL_PACKAGES) + list(scan_ip.NO_APT_TOOLS)
-    return sorted({b for b in bins if shutil.which(b) is None})
+    return sorted({b for b in bins if not is_installed(b)})
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +179,7 @@ def install_mongosh():
             log("錯誤: tgz 內找不到 bin/mongosh")
             return
         run(sudo_cmd(["install", "-m", "755", str(bins[0]), "/usr/local/bin/mongosh"]))
-    log("mongosh 安裝完成" if shutil.which("mongosh") else "mongosh 安裝失敗")
+    log("mongosh 安裝完成" if is_installed("mongosh") else "mongosh 安裝失敗")
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +203,7 @@ def install_odat():
             log("警告: odat 依賴安裝未完全成功（掃描時 odat 測試可能無法執行）")
     if not shutil.which("odat.py"):
         run(sudo_cmd(["ln", "-sf", str(dest / "odat.py"), "/usr/local/bin/odat.py"]))
-    log("odat 安裝完成" if shutil.which("odat.py") else "odat 安裝失敗")
+    log("odat 安裝完成" if is_installed("odat.py") else "odat 安裝失敗")
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +220,7 @@ def install_testssl():
             timeout=600)
     if not shutil.which("testssl.sh"):
         run(sudo_cmd(["ln", "-sf", str(dest / "testssl.sh"), "/usr/local/bin/testssl.sh"]))
-    log("testssl.sh 安裝完成" if shutil.which("testssl.sh") else "testssl.sh 安裝失敗")
+    log("testssl.sh 安裝完成" if is_installed("testssl.sh") else "testssl.sh 安裝失敗")
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +252,7 @@ def main():
     print("\n=== 安裝結果 ===")
     ok = True
     for b in sorted(missing):
-        if shutil.which(b):
+        if is_installed(b):
             print("  [OK]   %s" % b)
         else:
             ok = False
