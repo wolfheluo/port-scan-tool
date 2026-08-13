@@ -121,6 +121,10 @@
 |---|---|---|
 | **S1 指令注入面** | bash -c 插值未跳脫 (PTR/密碼注入鏈) | ✅ 已修 — 插值一律 shlex.quote + 目標字元集白名單 + 刪除 shlex 失敗→bash-c fallback, 單元測試 + bash -n 驗證 |
 | **L1 孫程序存活** | timeout 只殺直接子程序, 可能死鎖 | ✅ 已修 — Popen start_new_session + killpg 殺整個 process group |
+| **L2 msf 重試誤觸發** | 網路失敗也換名重跑最多 4 次 | ✅ 已修 — 僅載入錯誤觸發重試 |
+| **L3 timed_out 未重置** | 重試成功仍判逾時、逾時輸出吞掉 RISK | ✅ 已修 — 每次嘗試獨立旗標 + 有輸出先跑關鍵字匹配 |
+| **L4 載入失敗不判 FAIL** | 模組缺失落入關鍵字判讀 (假陰性) | ✅ 已修 — failed to load module 等加入 FAIL 判別 |
+| **L5 200 OK 假陽性** | 正常網站每條 HTTP 測試必 RISK | ✅ 已修 — 200 OK 從 GENERIC/80/8080 risk 移入 warn |
 | **L9 fallback 崩潰** | fb_* 未捕 socket 錯誤 → 全掃描中止 | ✅ 已修 — fb_* 內部捕 OSError + run_one 捕 OSError + _safe_run 頂層兜底 |
 | 溫和模式帳密互換 | hydra -L/-P、msf USER_FILE/PASS_FILE 全裝反 | ✅ 已修 + 單元測試 |
 | nc -n + hostname | 4 個測試 Can't parse IP | ✅ 已修 |
@@ -144,9 +148,7 @@
 
 - **整體架構**: 良好。職責分離清楚 (轉換層/執行層/判讀層), 併發處理正確, exploit 安全邊界確實生效, 多輪實測 (含真實目標) 穩定產出完整 artifacts。
 - **Verdict (獨立 reviewer 初審)**: not passed — 1 個 HIGH 注入面 + 多處邏輯缺陷。
-- **覆審狀態**: 初審列出的優先三項 (S1 注入面 / L1 killpg / L9 fallback 兜底) **已全部修復並經單元測試 + bash -n 語法驗證 + 本機 E2E 冒煙測試** (redis PONG → RISK、nc 8s 內完成、FAIL 0)。
+- **覆審狀態**: 初審列出的優先三項 (S1 注入面 / L1 killpg / L9 fallback 兜底) 與第二輪 L2–L5 (msf 重試判定 / timed_out 重置 / 載入失敗判 FAIL / 200 OK 假陽性) **已全部修復**, 經單元測試 + bash -n 語法驗證 + 本機 E2E 冒煙測試 (redis PONG → RISK、msf 正常執行無誤觸發重試、nc 8s 內完成、FAIL 0)。
 - **剩餘待辦** (均非阻斷):
-  1. L2/L3/L4 msf 重試與判讀正確性 (重試只認載入錯誤、timed_out 重置、載入失敗判 FAIL)
-  2. L5 200 OK 關鍵字移除 (減少假陽性)
-  3. L6 bash 包裝 bin0 提取 / L7 Ctrl-C 即時性 / L8 top1000 防護 / L10 rsync @
-  4. 第五節 N1–N7 強化建議
+  1. L6 bash 包裝 bin0 提取 / L7 Ctrl-C 即時性 / L8 top1000 防護 / L10 rsync @
+  2. 第五節 N1–N7 強化建議

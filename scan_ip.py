@@ -264,9 +264,9 @@ def classify_kind(cmd, mod=None):
 GENERIC_KEYWORDS = {
     "risk": [r"(?<!NOT )vulnerable", r"CVE-\d{4}", r"login successful", r"\[SUCCESS\]",
              r"anonymous", r"no auth", r"none auth", r"unauthorized",
-             r"public", r"PONG", r"200 OK"],
+             r"public", r"PONG"],
     "warn": [r"banner", r"version", r"220 ", r"\+OK", r"exists", r"valid",
-             r"title", r"server", r"timed out", r"no response",
+             r"title", r"server", r"200 OK", r"timed out", r"no response",
              r"connection refused", r"connect error", r"cracking protection"],
 }
 
@@ -285,7 +285,7 @@ PORT_KEYWORDS = {
          "warn": [r"nsid", r"id\.server", r"SOA", r"NS\s", r"records"]},
     69: {"risk": [r"writable"],
          "warn": [r"tftp"]},
-    80: {"risk": [r"DEBUG.{0,10}enabled", r"HTTP/1\.[01] 200"],
+    80: {"risk": [r"DEBUG.{0,10}enabled"],
          "warn": [r"HTTP/1\.[01]", r"title", r"server:", r"200 OK"]},
     "80,443": {"risk": [r"DEBUG.{0,10}enabled"],
                "warn": [r"HTTP/1\.[01]", r"title", r"server:"]},
@@ -394,8 +394,8 @@ PORT_KEYWORDS = {
            "warn": [r"weblogic", r"title"]},
     8009: {"risk": [r"ajp", r"ghostcat"],
            "warn": [r"ajp"]},
-    8080: {"risk": [r"HTTP/1\.[01] 200"],
-           "warn": [r"tomcat", r"jenkins", r"title", r"server:"]},
+    8080: {"risk": [],
+           "warn": [r"HTTP/1\.[01]", r"tomcat", r"jenkins", r"title", r"server:"]},
     8161: {"risk": [],
            "warn": [r"activemq", r"title"]},
     8443: {"risk": [r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)"],
@@ -960,8 +960,8 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
     dur = time.time() - t0
     combined = out + "\n" + err
 
-    # msf 模組載入失敗 → 自動重試修正
-    if test["mod"] and (rc != 0 or re.search(r"failed to load module|is not a valid module|unknown module", combined, re.I)):
+    # msf 模組載入失敗 → 自動重試修正（僅限載入錯誤，網路失敗不觸發）
+    if test["mod"] and re.search(r"failed to load module|is not a valid module|unknown module", combined, re.I):
         tried = [test["mod"]]
         for fix in MSF_RETRY_FIXES[1:]:
             m2 = fix(test["mod"])
@@ -973,6 +973,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
             log_line(log_path, "[%s][%s] 模組載入失敗，重試 %s" % (port, name, m2))
             argv2 = msf_to_argv(m2, ip, port, cfg["user"], cfg["password"],
                                 cfg["userlist"], cfg["wordlist"], gentle)
+            timed_out = False  # 每次嘗試各自記錄逾時旗標
             try:
                 p = subprocess.Popen(argv2, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, errors="replace", start_new_session=True,
@@ -998,15 +999,17 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
         f.write("$ %s\n[rc=%d, %.1fs%s]\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n"
                 % (cmd_display, rc, dur, ", 逾時" if timed_out else "", out, err))
 
-    # 判讀
-    if timed_out and not combined.strip():
-        status, summary = "WARN", "逾時無輸出(%ds)" % timeout
-    elif timed_out:
-        status, summary = "WARN", "逾時(%ds)，輸出已截斷" % timeout
-    elif rc != 0 and not combined.strip():
-        status, summary = "WARN", "執行失敗(rc=%d) 無輸出（連線逾時/拒絕等網路級負面）" % rc
-    elif re.search(r"not found|invalid script|failed to compile|no such script|command not found", combined, re.I):
-        status, summary = "FAIL", "指令/script 不可用（輸出含 not found 等）"
+    # 判讀（有輸出時先跑關鍵字匹配，逾時僅作降級等級，避免吞掉真實發現）
+    if not combined.strip():
+        if timed_out:
+            status, summary = "WARN", "逾時無輸出(%ds)" % timeout
+        elif rc != 0:
+            status, summary = "WARN", "執行失敗(rc=%d) 無輸出（連線逾時/拒絕等網路級負面）" % rc
+        else:
+            status, summary = "PASS", "無異常輸出"
+    elif re.search(r"not found|invalid script|failed to compile|no such script|command not found|"
+                   r"failed to load module|is not a valid module|unknown module", combined, re.I):
+        status, summary = "FAIL", "指令/script 不可用（輸出含 not found / 模組載入失敗等）"
     else:
         risk_hit = next((ln.strip() for ln in combined.splitlines()
                          if any(re.search(pat, ln, re.I) for pat in test["risk"])), None) if test["risk"] else None
@@ -1017,6 +1020,8 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
                              if any(re.search(pat, ln, re.I) for pat in test["warn"])), None) if test["warn"] else None
             if warn_hit:
                 status, summary = "WARN", warn_hit[:140]
+            elif timed_out:
+                status, summary = "WARN", "逾時(%ds)，輸出已截斷" % timeout
             elif rc != 0:
                 status, summary = "FAIL", "執行失敗(rc=%d)：%s" % (rc, (err or out).strip()[-120:])
             else:
