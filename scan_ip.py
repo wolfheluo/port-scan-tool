@@ -19,6 +19,7 @@ scan_ip.py — 單一 IP Port 風險自動化掃描（JSON 指令庫驅動版）
                        [--timeout N] [--no-install] [--out DIR]
                        [--brute] [--user U] [--password P] [--full-port]
                        [--table FILE] [--dry-run]
+                       [--check-tools] [--install-tools]
 
 模式：
   - 預設（溫和）：爆破類指令只嘗試單一帳密（--user/--password，預設 admin/password）
@@ -40,8 +41,11 @@ import signal
 import socket
 import subprocess
 import sys
+import tarfile
+import tempfile
 import threading
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -546,6 +550,193 @@ def extract_bin0(cmd):
             continue
         return t.split("/")[-1]
     return toks[0].split("/")[-1] if toks else ""
+
+
+# ---------------------------------------------------------------------------
+# 工具安裝（--install-tools / --check-tools）
+# ---------------------------------------------------------------------------
+# TOOL_PACKAGES 標 None（Kali 預裝）但在 Kali/Debian 其實有套件的
+# 值為候選套件清單（依序嘗試，裝到第一個成功）
+KALI_APT = {
+    "crackmapexec": ["crackmapexec"],
+    "ncat": ["ncat", "nmap"],
+    "msfconsole": ["metasploit-framework"],
+    "nikto": ["nikto"],
+    "sqlmap": ["sqlmap"],
+    "enum4linux": ["enum4linux"],
+    "evil-winrm": ["evil-winrm"],
+    "smbclient": ["smbclient"],
+    "smbmap": ["smbmap"],
+    "rpcclient": ["samba-common-bin"],
+    "sslscan": ["sslscan"],
+    "hydra": ["hydra"],
+    "nmap": ["nmap"],
+    "nc": ["netcat-openbsd"],
+    "curl": ["curl"],
+    "masscan": ["masscan"],
+    "dnsrecon": ["dnsrecon"],
+    "telnet": ["telnet"],
+    "snmp-check": ["snmpcheck"],
+}
+
+# 無 apt 來源 → 特殊安裝函式
+SPECIAL_INSTALLERS = {
+    "mongosh": "_install_mongosh",
+    "odat": "_install_odat",
+    "odat.py": "_install_odat",
+    "testssl.sh": "_install_testssl",
+}
+
+# 安裝位置（/usr/local/bin 或 /opt），供 PATH 之外的最終判定
+INSTALL_PATHS = {
+    "mongosh": ("/usr/local/bin/mongosh",),
+    "odat": ("/opt/odat/odat.py",),
+    "odat.py": ("/opt/odat/odat.py",),
+    "testssl.sh": ("/opt/testssl.sh/testssl.sh",),
+}
+
+
+def _is_tool_installed(bin_name):
+    if shutil.which(bin_name):
+        return True
+    return any(os.access(p, os.X_OK) for p in INSTALL_PATHS.get(bin_name, ()))
+
+
+def _sudo_cmd(cmd):
+    """非 root 時自動加 sudo 前綴。"""
+    if os.geteuid() == 0:
+        return cmd
+    if shutil.which("sudo"):
+        return ["sudo"] + cmd
+    print("錯誤: 需要 root 或 sudo 才能執行: %s" % " ".join(cmd))
+    sys.exit(1)
+
+
+def _run_install_cmd(cmd, timeout=600):
+    print("[install] $ %s" % " ".join(cmd), flush=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if r.stdout.strip():
+        print("[install]   " + r.stdout.strip()[-500:], flush=True)
+    if r.stderr.strip():
+        print("[install]   ! " + r.stderr.strip()[-500:], flush=True)
+    return r
+
+
+def _http_get(url, timeout=60):
+    req = urllib.request.Request(url, headers={"User-Agent": "port-scan-tool"})
+    return urllib.request.urlopen(req, timeout=timeout).read()
+
+
+def _install_mongosh():
+    if _is_tool_installed("mongosh"):
+        return
+    print("[install] 安裝 mongosh（MongoDB 官方 tgz，查最新版號）...", flush=True)
+    api = "https://api.github.com/repos/mongodb-js/mongosh/releases/latest"
+    tag = json.loads(_http_get(api).decode()).get("tag_name", "").lstrip("v")
+    if not re.match(r"^\d+\.\d+\.\d+", tag):
+        print("[install] 錯誤: 無法取得 mongosh 最新版號（%r）" % tag, flush=True)
+        return
+    url = "https://downloads.mongodb.com/compass/mongosh-%s-linux-x64.tgz" % tag
+    print("[install] 下載 %s" % url, flush=True)
+    with tempfile.TemporaryDirectory() as td:
+        tgz = Path(td) / "mongosh.tgz"
+        tgz.write_bytes(_http_get(url, timeout=120))
+        out = Path(td) / "extract"
+        out.mkdir()
+        with tarfile.open(tgz) as t:
+            t.extractall(out, filter="data")
+        bins = list(out.rglob("bin/mongosh"))
+        if not bins:
+            print("[install] 錯誤: tgz 內找不到 bin/mongosh", flush=True)
+            return
+        _run_install_cmd(_sudo_cmd(["install", "-m", "755", str(bins[0]),
+                                    "/usr/local/bin/mongosh"]))
+    print("[install] mongosh 安裝完成" if _is_tool_installed("mongosh")
+          else "[install] mongosh 安裝失敗", flush=True)
+
+
+def _install_odat():
+    if _is_tool_installed("odat.py"):
+        return
+    dest = Path("/opt/odat")
+    print("[install] 安裝 odat（clone quentinhardy/odat → %s）..." % dest, flush=True)
+    if not (dest / ".git").exists():
+        _run_install_cmd(_sudo_cmd(["git", "clone", "--depth", "1",
+                                    "https://github.com/quentinhardy/odat.git", str(dest)]),
+                         timeout=600)
+    req = dest / "requirements.txt"
+    if req.exists():
+        r = _run_install_cmd(_sudo_cmd(["pip3", "install", "-r", str(req),
+                                        "--break-system-packages"]), timeout=600)
+        if r.returncode != 0:
+            print("[install] 警告: odat 依賴安裝未完全成功（掃描時 odat 測試可能無法執行）", flush=True)
+    if not shutil.which("odat.py"):
+        _run_install_cmd(_sudo_cmd(["ln", "-sf", str(dest / "odat.py"),
+                                    "/usr/local/bin/odat.py"]))
+    print("[install] odat 安裝完成" if _is_tool_installed("odat.py")
+          else "[install] odat 安裝失敗", flush=True)
+
+
+def _install_testssl():
+    if _is_tool_installed("testssl.sh"):
+        return
+    dest = Path("/opt/testssl.sh")
+    print("[install] 安裝 testssl.sh（clone testssl/testssl.sh → %s）..." % dest, flush=True)
+    if not (dest / ".git").exists():
+        _run_install_cmd(_sudo_cmd(["git", "clone", "--depth", "1",
+                                    "https://github.com/testssl/testssl.sh.git", str(dest)]),
+                         timeout=600)
+    if not shutil.which("testssl.sh"):
+        _run_install_cmd(_sudo_cmd(["ln", "-sf", str(dest / "testssl.sh"),
+                                    "/usr/local/bin/testssl.sh"]))
+    print("[install] testssl.sh 安裝完成" if _is_tool_installed("testssl.sh")
+          else "[install] testssl.sh 安裝失敗", flush=True)
+
+
+def install_tools_main(check_only=False):
+    """--install-tools / --check-tools 入口。回傳 True = 全部齊全。"""
+    all_bins = list(TOOL_PACKAGES) + list(NO_APT_TOOLS)
+    missing = sorted({b for b in all_bins if not _is_tool_installed(b)})
+    if not missing:
+        print("所有工具都已安裝，無需動作。")
+        return True
+    print("缺失工具 (%d): %s" % (len(missing), ", ".join(missing)))
+    if check_only:
+        return False
+
+    apt_missing = [b for b in missing if b not in SPECIAL_INSTALLERS]
+    special = [b for b in missing if b in SPECIAL_INSTALLERS]
+    print("  將以 apt 安裝: %s" % (", ".join(apt_missing) or "（無）"))
+    print("  將以特殊來源安裝: %s" % (", ".join(special) or "（無）"))
+
+    # apt 安裝
+    pkgs = set()
+    for b in apt_missing:
+        cands = TOOL_PACKAGES.get(b) or KALI_APT.get(b) or []
+        if isinstance(cands, str):
+            cands = [cands]
+        for c in cands:
+            pkgs.add(c)
+    pkgs.discard(None)
+    if pkgs:
+        print("[install] apt 套件: %s" % ", ".join(sorted(pkgs)), flush=True)
+        _run_install_cmd(_sudo_cmd(["apt-get", "update", "-qq"]), timeout=600)
+        _run_install_cmd(_sudo_cmd(["apt-get", "install", "-y"] + sorted(pkgs)),
+                         timeout=1200)
+
+    # 特殊來源
+    for b in special:
+        globals()[SPECIAL_INSTALLERS[b]]()
+
+    print("\n=== 安裝結果 ===")
+    ok = True
+    for b in sorted(missing):
+        if _is_tool_installed(b):
+            print("  [OK]   %s" % b)
+        else:
+            ok = False
+            print("  [FAIL] %s" % b)
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -1175,7 +1366,14 @@ def main():
     ap.add_argument("--full-port", action="store_true", help="TCP 全埠掃描 -p-（預設 top1000+表格聯集）")
     ap.add_argument("--table", default=None, help="JSON 指令庫路徑（預設依序找 repo 目錄或 /root 下的 common_ports_test_commands.json）")
     ap.add_argument("--dry-run", action="store_true", help="不連目標，驗證指令庫可執行性")
+    ap.add_argument("--install-tools", action="store_true", help="安裝所有缺失的外部工具後結束（需要 root/sudo）")
+    ap.add_argument("--check-tools", action="store_true", help="只列出缺失的外部工具，不安裝")
     args = ap.parse_args()
+
+    # 工具安裝模式：不需要指令庫/目標
+    if args.check_tools or args.install_tools:
+        ok = install_tools_main(check_only=args.check_tools)
+        sys.exit(0 if ok else 1)
 
     table = resolve_table(args.table)
     if table is None:

@@ -62,8 +62,10 @@ python3 scan_ip.py <IP> [options]
 | `--user U` | `admin` | Single username for gentle-mode brute attempts. |
 | `--password P` | `password` | Single password for gentle-mode brute attempts. |
 | `--full-port` | off | Full TCP scan `-p-` (default: top1000+table union). |
-| `--table FILE` | `/root/common_ports_test_commands.json` | JSON command library path. |
+| `--table FILE` | auto | JSON command library path (default: repo dir, then `/root/common_ports_test_commands.json`). |
 | `--dry-run` | off | Validate all library commands are executable without targeting a host. |
+| `--check-tools` | off | List missing external tools (no install). |
+| `--install-tools` | off | Install all missing external tools then exit (needs root/sudo; apt + special sources for mongosh/odat/testssl.sh). |
 
 ### Modes
 
