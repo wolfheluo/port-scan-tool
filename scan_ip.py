@@ -48,7 +48,17 @@ from xml.etree import ElementTree
 
 BASE = Path(__file__).resolve().parent
 RUNS = BASE / "runs"
-DEFAULT_TABLE = "/root/common_ports_test_commands.json"
+
+
+def resolve_table(explicit):
+    """--table 未指定時依序尋找: repo 目錄 → /root。回傳絕對路徑或 None。"""
+    if explicit:
+        return os.path.abspath(explicit)
+    for cand in (BASE / "common_ports_test_commands.json",
+                 Path("/root/common_ports_test_commands.json")):
+        if cand.is_file():
+            return str(cand)
+    return None
 
 # ---------------------------------------------------------------------------
 # 工具 → 套件對照（缺失時 apt-get install；None = 不自動安裝）
@@ -75,7 +85,7 @@ TOOL_PACKAGES = {
 }
 
 # 無對應 apt 套件（Kali 專屬/外部 repo/手動安裝）→ 缺則 SKIP
-NO_APT_TOOLS = {"snmp-check", "odat", "mongosh", "testssl.sh"}
+NO_APT_TOOLS = {"snmp-check", "odat", "odat.py", "mongosh", "testssl.sh"}
 
 # 分級 timeout（秒）：detect / scan / brute / interactive；--timeout 可整體覆蓋
 TIMEOUTS = {"detect": 60, "scan": 120, "brute": 300, "interactive": 25}
@@ -115,13 +125,16 @@ KNOWN_FIXES = [
     # msf 模組不存在 → 改用實際存在的模組
     (r"auxiliary/scanner/http/ajp_requests", "auxiliary/admin/http/tomcat_ghostcat"),
     (r"auxiliary/scanner/http/webmin_login", "auxiliary/admin/webmin/file_disclosure"),
-    # nc 舊式旗標 → -n -w 5
-    (r"nc -nvc ", "nc -n -w 5 "),
-    (r"nc -ncv ", "nc -n -w 5 "),
-    (r"nc -nvc\b", "nc -n -w 5"),
-    (r"nc -nv ", "nc -n -w 5 "),  # 無 -w 的 nc 會等 stdin 逾時
+    # nc 舊式旗標 → -w 5（不用 -n：hostname 目標會被 -n 擋下 Can't parse）
+    (r"nc -nvc ", "nc -w 5 "),
+    (r"nc -ncv ", "nc -w 5 "),
+    (r"nc -nvc\b", "nc -w 5"),
+    (r"nc -nv ", "nc -w 5 "),  # 無 -w 的 nc 會等 stdin 逾時
     # nc 缺 port（表格 25 原文 nc -nvc {IP}）→ 補 {PORT}
-    (r"nc -n -w 5 \{IP\}$", "nc -n -w 5 {IP} {PORT}"),
+    (r"nc -w 5 \{IP\}$", "nc -w 5 {IP} {PORT}"),
+    (r"nc -n -w 5 ", "nc -w 5 "),  # 殘留 -n 一律剝除
+    # netcat-traditional 的 -w 不可靠（tty 下停用、實測約 2x 失真）→ GNU timeout 硬包
+    (r"^nc -w 5 ", "timeout 8 nc "),
     # redis-cli 無子指令 → 補 PING（避免進入互動模式卡死）
     (r"^redis-cli -h \{IP\} -p (\d+|\{PORT\})$", r"redis-cli -h {IP} -p \1 PING"),
     # mysql -p（互動式密碼提示）→ 溫和模式單一密碼
@@ -129,8 +142,13 @@ KNOWN_FIXES = [
     (r" -p$", " -p{PASSWORD}"),
     # onesixtyone 需要 dict.txt → 改用內建社群字串清單
     (r"onesixtyone -c dict\.txt", "onesixtyone"),
-    # openssl s_client 互動 → 包 echo 餵 stdin EOF
-    (r"^openssl s_client ", "echo | openssl s_client "),
+    # openssl s_client 互動 → 包 echo 餵 stdin EOF + timeout 硬上限（993/995 伺服器不關連線會掛 60s）
+    (r"^openssl s_client ", "echo | timeout 12 openssl s_client "),
+    # sslscan 指令庫把「或」混進指令字串（{IP}or{IP} / {IP} 或 sslscan ...）→ 取有效形式
+    (r"sslscan \{IP\}or\{IP\}:\{PORT\}", "sslscan {IP}:{PORT}"),
+    (r"sslscan \{IP\} 或 sslscan \{IP\}:\{PORT\}", "sslscan {IP}:{PORT}"),
+    # 表格「->註解」（如 ->SSL憑證資訊）會被 bash 當重新導向 → 剝除
+    (r"\s+->\s*[^\s]*$", ""),
     # 多餘空白
     (r"\s{2,}", " "),
 ]
@@ -167,8 +185,15 @@ def load_library(path):
     """載入 JSON 指令庫，回傳 (ports_meta, groups)。
     groups: {port_key(str): {"name":..., "commands":[cmd_str,...], "note":...}}
     """
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print("錯誤: JSON 指令庫不存在: %s" % path)
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print("錯誤: JSON 指令庫格式錯誤 %s: %s" % (path, e))
+        sys.exit(1)
     groups = {}
     for p in data.get("ports", []):
         groups[str(p["port"])] = {
@@ -231,23 +256,6 @@ def classify_kind(cmd, mod=None):
     return "detect"
 
 
-def normalize_cmd(cmd, port, user, password, userlist, passwords, domain, path):
-    """變數填充 → 回傳 (argv, shell_wrap, src_rendered)。
-    shell_wrap=True 表示需以 bash -c 執行（含管線/環境變數/引號）。"""
-    repl = {
-        "{IP}": "IP_PLACEHOLDER", "{PORT}": str(port), "{DOMAIN}": domain,
-        "{USER}": user, "{PASSWORD}": password,
-        "{USERLIST}": userlist, "{PASSWORDS}": passwords, "{PATH}": path,
-    }
-    rendered = cmd
-    for k, v in repl.items():
-        rendered = rendered.replace(k, v)
-    rendered = rendered.replace("IP_PLACEHOLDER", "IP_VALUE")  # 防 {IP} 前綴誤替
-    # 真正填入 IP（placehold 是為了避免 {IP} 在 {IP}suffix 場景被提前吃掉）
-    rendered = rendered.replace("IP_VALUE", "IP_FINAL")
-    return rendered
-
-
 # ---------------------------------------------------------------------------
 # 每 port 關鍵字表（分級判讀用）
 # risk: 命中 = RISK；warn: 命中 = WARN；皆無 = PASS
@@ -257,7 +265,8 @@ GENERIC_KEYWORDS = {
              r"anonymous", r"no auth", r"none auth", r"unauthorized",
              r"public", r"PONG", r"200 OK"],
     "warn": [r"banner", r"version", r"220 ", r"\+OK", r"exists", r"valid",
-             r"title", r"server"],
+             r"title", r"server", r"timed out", r"no response",
+             r"connection refused", r"connect error", r"cracking protection"],
 }
 
 PORT_KEYWORDS = {
@@ -275,9 +284,9 @@ PORT_KEYWORDS = {
          "warn": [r"nsid", r"id\.server", r"SOA", r"NS\s", r"records"]},
     69: {"risk": [r"writable"],
          "warn": [r"tftp"]},
-    80: {"risk": [r"enabled|DEBUG", r"HTTP/1\.[01] 200"],
+    80: {"risk": [r"DEBUG.{0,10}enabled", r"HTTP/1\.[01] 200"],
          "warn": [r"HTTP/1\.[01]", r"title", r"server:", r"200 OK"]},
-    "80,443": {"risk": [r"enabled|DEBUG"],
+    "80,443": {"risk": [r"DEBUG.{0,10}enabled"],
                "warn": [r"HTTP/1\.[01]", r"title", r"server:"]},
     88: {"risk": [r"AS-REP", r"has AS-REP"],
          "warn": [r"krb5", r"realm"]},
@@ -298,7 +307,7 @@ PORT_KEYWORDS = {
           "warn": [r"bgp", r"open"]},
     389: {"risk": [],
           "warn": [r"namingContexts", r"ldap", r"dc=", r"rootDSE"]},
-    443: {"risk": [r"SSLv2", r"SSLv3", r"TLSv1\.0"],
+    443: {"risk": [r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)"],
           "warn": [r"self-signed", r"not valid after", r"subject", r"accepted",
                    r"least strength", r"tlsv1"]},
     445: {"risk": [r"SMBv1", r"MS17-010", r"VULNERABLE", r"READ", r"WRITE",
@@ -359,8 +368,8 @@ PORT_KEYWORDS = {
            "warn": [r"ldap", r"GC"]},
     3306: {"risk": [r"VERSION\(", r"^\d+\.\d+", r"login successful"],
            "warn": [r"access denied", r"ERROR 1045", r"mysql"]},
-    3389: {"risk": [r"login:\s*\S+\s*password:", r"\[SUCCESS\]", r"SSLv2", r"SSLv3",
-                    r"TLSv1\.0"],
+    3389: {"risk": [r"login:\s*\S+\s*password:", r"\[SUCCESS\]",
+                    r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)"],
            "warn": [r"least strength", r"ntlm", r"rdp"]},
     4369: {"risk": [],
            "warn": [r"erlang", r"rabbitmq"]},
@@ -388,7 +397,7 @@ PORT_KEYWORDS = {
            "warn": [r"tomcat", r"jenkins", r"title", r"server:"]},
     8161: {"risk": [],
            "warn": [r"activemq", r"title"]},
-    8443: {"risk": [r"SSLv2", r"SSLv3", r"TLSv1\.0"],
+    8443: {"risk": [r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)"],
            "warn": [r"self-signed", r"least strength"]},
     8888: {"risk": [],
            "warn": [r"jupyter", r"title"]},
@@ -516,6 +525,9 @@ def extract_bin0(cmd):
     if c.startswith(("TRACE ", "Host:", "(", "修補:", "msf6>", "msf6 >")):
         return ""
     toks = c.split()
+    # timeout N <bin> ... → 剝掉包裝前綴，取真實 binary（測試名與缺失檢查用）
+    if toks and toks[0] == "timeout" and len(toks) > 2 and toks[1].isdigit():
+        toks = toks[2:]
     for t in toks:
         if "=" in t and not t.startswith(("/", "-", "{", "http")):
             continue  # env 前綴
@@ -530,6 +542,7 @@ def extract_bin0(cmd):
 # ---------------------------------------------------------------------------
 def preflight(no_install, log_path):
     missing = [b for b in TOOL_PACKAGES if shutil.which(b) is None]
+    missing += [b for b in NO_APT_TOOLS if shutil.which(b) is None]
     # 無 apt 套件的工具：缺則 SKIP（不嘗試安裝）
     no_apt_missing = sorted(set(missing) & NO_APT_TOOLS)
     for b in no_apt_missing:
@@ -574,9 +587,37 @@ def preflight(no_install, log_path):
 # ---------------------------------------------------------------------------
 # nmap 掃描
 # ---------------------------------------------------------------------------
+def _parse_nmap_xml(xml_text, include_open_filtered=False):
+    """解析 nmap -oX - 輸出 → ({port: proto}, {port: service})。"""
+    open_ports, services = {}, {}
+    root = ElementTree.fromstring(xml_text)
+    for host in root.iter("host"):
+        for port in host.iter("port"):
+            st = port.find("state")
+            if st is None:
+                continue
+            state = st.get("state")
+            if state != "open" and not (include_open_filtered and state == "open|filtered"):
+                continue
+            pid = int(port.get("portid") or 0)
+            open_ports[pid] = port.get("protocol", "tcp")
+            svc = port.find("service")
+            services[pid] = svc.get("name", "") if svc is not None else ""
+    return open_ports, services
+
+
 def scan_ports(ip, log_path, full_port, groups):
     """TCP + UDP 掃描。回傳 ({port: proto}, {port: service})。"""
-    tcp_ports = set()
+    # 表格 + web 埠（nmap top-1000 之外的補掃清單）
+    table_ports = set()
+    for key in groups:
+        for piece in key.split(","):
+            if piece.strip().isdigit():
+                table_ports.add(int(piece))
+    table_ports |= WEB_PORTS
+
+    # top1000.txt：僅作 nmap 不可用時的 Python connect fallback 埠清單
+    fallback_ports = set()
     bad_tokens = []
     with open(BASE / "top1000.txt", encoding="utf-8") as f:
         for chunk in f:
@@ -585,16 +626,12 @@ def scan_ports(ip, log_path, full_port, groups):
                 if not x:
                     continue
                 if x.isdigit() and 0 <= int(x) <= 65535:
-                    tcp_ports.add(int(x))
+                    fallback_ports.add(int(x))
                 else:
                     bad_tokens.append(x)
     if bad_tokens:
         log_line(log_path, "警告: top1000.txt 含無效 port token（已忽略）: %s" % ", ".join(bad_tokens[:5]))
-    for key in groups:
-        for piece in key.split(","):
-            if piece.strip().isdigit():
-                tcp_ports.add(int(piece))
-    tcp_ports |= WEB_PORTS
+    fallback_ports |= table_ports
 
     udp_ports = set()
     for key, g in groups.items():
@@ -607,31 +644,28 @@ def scan_ports(ip, log_path, full_port, groups):
                             udp_ports.add(int(piece))
 
     open_ports, services = {}, {}
-    # TCP
+
+    # TCP：nmap 內建 top-1000（nmap 自身維護，不需自備清單）
+    # -p 會覆蓋 --top-ports，故表格/web 埠另以短清單補掃
     if full_port:
-        plist_cmd = "-p-"
-        desc = "全埠 -p-"
+        scans = [("-p-", "全埠 -p-")]
     else:
-        plist_cmd = "-p " + ",".join(str(p) for p in sorted(tcp_ports))
-        desc = "%d ports（top1000+表格+web 聯集）" % len(tcp_ports)
-    log_line(log_path, "掃描: nmap -Pn -sT -T4 --unprivileged %s %s（TCP）" % (plist_cmd, ip))
+        scans = [("--top-ports 1000", "nmap top-1000"),
+                 ("-p " + ",".join(str(p) for p in sorted(table_ports)),
+                  "表格+web 埠(%d)" % len(table_ports))]
     try:
-        r = subprocess.run(["nmap", "-Pn", "-sT", "-T4", "--unprivileged"]
-                           + plist_cmd.split() + ["-oX", "-", ip],
-                           capture_output=True, text=True, timeout=600)
-        root = ElementTree.fromstring(r.stdout)
-        for host in root.iter("host"):
-            for port in host.iter("port"):
-                st = port.find("state")
-                if st is None or st.get("state") != "open":
-                    continue
-                pid = int(port.get("portid"))
-                open_ports[pid] = port.get("protocol", "tcp")
-                svc = port.find("service")
-                services[pid] = svc.get("name", "") if svc is not None else ""
+        for plist_cmd, desc in scans:
+            log_line(log_path, "掃描: nmap -Pn -sT -T4 --unprivileged %s %s（TCP %s）" % (
+                plist_cmd, ip, desc))
+            r = subprocess.run(["nmap", "-Pn", "-sT", "-T4", "--unprivileged"]
+                               + plist_cmd.split() + ["-oX", "-", ip],
+                               capture_output=True, text=True, timeout=600)
+            o, sv = _parse_nmap_xml(r.stdout)
+            open_ports.update(o)
+            services.update(sv)
     except Exception as e:
         log_line(log_path, "nmap TCP 失敗（%s），改用 Python connect fallback" % e)
-        open_ports.update(python_connect_scan(ip, log_path, sorted(tcp_ports)))
+        open_ports.update(python_connect_scan(ip, log_path, sorted(fallback_ports)))
 
     # UDP（表格內定點）
     if udp_ports:
@@ -642,18 +676,10 @@ def scan_ports(ip, log_path, full_port, groups):
             r = subprocess.run(["nmap", "-Pn", "-sU", "-T4", "--max-retries", "1",
                                 "-p", udp_list, "-oX", "-", ip],
                                capture_output=True, text=True, timeout=600)
-            root = ElementTree.fromstring(r.stdout)
-            for host in root.iter("host"):
-                for port in host.iter("port"):
-                    st = port.find("state")
-                    if st is None:
-                        continue
-                    state = st.get("state")
-                    if state in ("open", "open|filtered"):
-                        pid = int(port.get("portid"))
-                        open_ports.setdefault(pid, "udp")
-                        svc = port.find("service")
-                        services.setdefault(pid, svc.get("name", "") if svc is not None else "")
+            o, sv = _parse_nmap_xml(r.stdout, include_open_filtered=True)
+            for pid in o:
+                open_ports.setdefault(pid, o[pid])
+                services.setdefault(pid, sv.get(pid, ""))
         except Exception as e:
             log_line(log_path, "nmap UDP 失敗: %s" % e)
 
@@ -766,30 +792,15 @@ def resolve_domain(ip):
         return ""
 
 
-def gentle_credentialize(cmd, user, password):
-    """溫和模式：爆破指令的字典旗標改為單一帳密。
-    - hydra: -L {USERLIST} -P {PASSWORDS} → -l user -p password
-    - thc-pptp-bruter: -U {USERLIST} -W {PASSWORDS} → -u user -w password
-    """
-    out = cmd
-    # hydra 類
-    out = re.sub(r"-L\s+(\{[A-Z]+\}|[^\s]+)\s+-P\s+(\{[A-Z]+\}|[^\s]+)",
-                 "-l %s -p %s" % (user, password), out)
-    out = re.sub(r"-P\s+(\{[A-Z]+\}|[^\s]+)", "-p %s" % password, out)
-    out = re.sub(r"-L\s+(\{[A-Z]+\}|[^\s]+)", "-l %s" % user, out)
-    # thc-pptp-bruter 類
-    out = re.sub(r"-U\s+(\{[A-Z]+\}|[^\s]+)", "-u %s" % user, out)
-    out = re.sub(r"-W\s+(\{[A-Z]+\}|[^\s]+)", "-w %s" % password, out)
-    return out
-
-
 def make_gentle_lists(out_dir, user, password):
-    """溫和模式：建立單行帳密檔，讓所有爆破指令只試一組。"""
+    """溫和模式：建立單行帳密檔，讓所有爆破指令只試一組。
+    回傳 (wordlist_path, userlist_path) — 對應 main 的 cfg["wordlist"]/cfg["userlist"]。
+    """
     u = out_dir / "gentle_userlist.txt"
     p = out_dir / "gentle_passwords.txt"
     u.write_text(user + "\n", encoding="utf-8")
     p.write_text(password + "\n", encoding="utf-8")
-    return str(u), str(p)
+    return str(p), str(u)
 
 
 def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
@@ -821,6 +832,17 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
         shell_wrap = False
         src_display = test["src"]
     else:
+        # UDP 掃描需 root（非 root 環境 nmap -sU 直接 QUIT）→ SKIP 而非 FAIL
+        if os.geteuid() != 0 and "-sU" in cmd:
+            log_line(log_path, "[%s][%s] SKIP: UDP 掃描需要 root 權限（非 root 環境）" % (port, name))
+            return {"port": port, "test": name, "kind": test["kind"], "status": "SKIP",
+                    "summary": "UDP 掃描需要 root 權限", "raw": "", "duration": time.time() - t0, "cmd": cmd}
+        # onesixtyone 只接受數字 IP（hostname 會 Malformed IP address）
+        if "onesixtyone" in cmd and not re.match(r"^\d+(\.\d+){3}$", ip):
+            try:
+                ip = socket.gethostbyname(ip)
+            except socket.gaierror:
+                pass
         rendered = cmd
         repl = {"{IP}": ip, "{PORT}": str(port), "{DOMAIN}": domain, "{USER}": cfg["user"],
                 "{PASSWORD}": cfg["password"], "{USERLIST}": cfg["userlist"],
@@ -843,12 +865,12 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
                 shell_wrap = True
         src_display = test["src"]
 
-    # docker 環境（無 raw socket）：nmap 指令自動補 --unprivileged
-    in_docker = os.path.exists("/.dockerenv") or os.geteuid() != 0
+    # docker / 非 root 環境（無 raw socket）：nmap 指令自動補 --unprivileged
+    not_root = os.path.exists("/.dockerenv") or os.geteuid() != 0
     if not test.get("mod") and argv and argv[0].split("/")[-1] == "nmap" \
-            and "--unprivileged" not in argv and in_docker:
+            and "--unprivileged" not in argv and not_root:
         argv.insert(1, "--unprivileged")
-        log_line(log_path, "[%s][%s] docker 環境：nmap 自動加 --unprivileged" % (port, name))
+        log_line(log_path, "[%s][%s] 非 root/docker 環境：nmap 自動加 --unprivileged" % (port, name))
 
     # 工具缺失檢查（有 fallback 的例外）
     if test.get("mod"):
@@ -857,6 +879,8 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
         bin0 = argv[2].split()[0].split("/")[-1]
     else:
         bin0 = argv[0].split("/")[-1] if argv else "?"
+    if bin0 == "timeout" and len(argv) >= 3:
+        bin0 = argv[2].split("/")[-1]  # timeout 8 nc ... → 真實 binary 是 nc
     if bin0 in missing_bins and bin0 not in FALLBACK_BIN:
         log_line(log_path, "[%s][%s] SKIP: 工具缺失 %s" % (port, name, bin0))
         return {"port": port, "test": name, "kind": test["kind"], "status": "SKIP",
@@ -876,7 +900,8 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
             out, rc = FALLBACK_BIN[bin0](ip, port, cfg)
         else:
             p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 text=True, env={**os.environ, "TERM": "dumb"})
+                                 text=True, errors="replace",
+                                 env={**os.environ, "TERM": "dumb"})
             try:
                 out, err = p.communicate(timeout=timeout)
                 rc = p.returncode
@@ -907,7 +932,8 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
                                 cfg["userlist"], cfg["wordlist"], gentle)
             try:
                 p = subprocess.Popen(argv2, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     text=True, env={**os.environ, "TERM": "dumb"})
+                                     text=True, errors="replace",
+                                     env={**os.environ, "TERM": "dumb"})
                 out, err = p.communicate(timeout=timeout)
                 rc = p.returncode
             except subprocess.TimeoutExpired:
@@ -928,11 +954,11 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
 
     # 判讀
     if timed_out and not combined.strip():
-        status, summary = "FAIL", "逾時無輸出(%ds)" % timeout
+        status, summary = "WARN", "逾時無輸出(%ds)" % timeout
     elif timed_out:
         status, summary = "WARN", "逾時(%ds)，輸出已截斷" % timeout
     elif rc != 0 and not combined.strip():
-        status, summary = "FAIL", "執行失敗(rc=%d) 無輸出" % rc
+        status, summary = "WARN", "執行失敗(rc=%d) 無輸出（連線逾時/拒絕等網路級負面）" % rc
     elif re.search(r"not found|invalid script|failed to compile|no such script|command not found", combined, re.I):
         status, summary = "FAIL", "指令/script 不可用（輸出含 not found 等）"
     else:
@@ -1058,9 +1084,15 @@ def main():
     ap.add_argument("--user", default="admin", help="溫和模式單一帳號（預設 admin）")
     ap.add_argument("--password", default="password", help="溫和模式單一密碼（預設 password）")
     ap.add_argument("--full-port", action="store_true", help="TCP 全埠掃描 -p-（預設 top1000+表格聯集）")
-    ap.add_argument("--table", default=DEFAULT_TABLE, help="JSON 指令庫路徑（預設 /root/common_ports_test_commands.json）")
+    ap.add_argument("--table", default=None, help="JSON 指令庫路徑（預設依序找 repo 目錄或 /root 下的 common_ports_test_commands.json）")
     ap.add_argument("--dry-run", action="store_true", help="不連目標，驗證指令庫可執行性")
     args = ap.parse_args()
+
+    table = resolve_table(args.table)
+    if table is None:
+        print("錯誤: 找不到 JSON 指令庫。請用 --table 指定，或將 common_ports_test_commands.json 放入 %s 或 /root/" % BASE)
+        sys.exit(1)
+    args.table = table
 
     if args.dry_run:
         out_root = Path(args.out)
@@ -1076,6 +1108,11 @@ def main():
         sys.exit(1)
 
     ip = args.ip
+    # 容忍誤貼完整 URL（剝離 scheme 與路徑，避免 nmap 解析失敗白跑）
+    m = re.match(r"^(?:[a-zA-Z][a-zA-Z0-9+.\-]*://)?([^/\s]+)", ip)
+    if m:
+        ip = m.group(1)
+    args.ip = ip
     wordlist = os.path.abspath(args.wordlist)
     userlist = os.path.abspath(args.userlist)
     for f, label in ((wordlist, "字典檔"), (userlist, "帳號清單")):
@@ -1184,7 +1221,7 @@ def main():
     lines.append("=== Port 風險掃描總結 ===")
     lines.append("目標: %s    時間: %s" % (ip, ts))
     lines.append("掃描: %s    開啟 port: %d 個" % (
-        "全埠 -p-" if args.full_port else "top1000+表格聯集", len(open_ports)))
+        "全埠 -p-" if args.full_port else "nmap top-1000 + 表格埠", len(open_ports)))
     lines.append("模式: %s" % ("溫和（單一帳密 %s/%s）" % (args.user, args.password) if gentle else "爆破（完整字典）"))
     lines.append("測試: 總 %d   RISK %d   WARN %d   PASS %d   FAIL %d   SKIP %d" % (
         stats["total"], stats["RISK"], stats["WARN"], stats["PASS"], stats["FAIL"], stats["SKIP"]))

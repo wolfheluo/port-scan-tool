@@ -112,9 +112,9 @@ Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
 - **Dry-run** — all 190 library commands verified: 43 binaries present,
   18/18 msf modules load successfully. 4 Kali-only tools without apt
   packages (snmp-check, odat.py, mongosh, testssl.sh) are SKIP-listed.
-- **End-to-end** — verified against a local harness (`test_server.py`)
-  exposing simulated SMTP, POP3, Redis, HTTP (TRACE-enabled), and an
-  unclassified banner port on `127.0.0.1`:
+- **End-to-end** — verified against local simulated services (SMTP, POP3,
+  Redis, HTTP with TRACE enabled, and an unclassified banner port) on
+  `127.0.0.1`:
   - 5 ports detected, 20 tests dispatched, `FAIL 0`.
   - `http-trace` correctly graded `RISK` (HTTP/1.1 200 OK to TRACE).
   - SMTP/POP3 banners graded `WARN`; msf login modules `PASS`.
@@ -123,12 +123,12 @@ Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
 
 ## Known Issues
 
-- hydra's POP3 module hangs against the simulated `test_server.py` POP3
-  service in docker (waits for connection close after `-ERR`); real POP3
+- hydra's POP3 module hangs against simulated POP3 services that do not
+  close the connection after `-ERR` (waits for connection close); real POP3
   servers close the connection on auth failure, so this is a harness-only
   limitation.
-- `top1000.txt` contains one corrupt token (`282116379` — two ports merged);
-  the scanner logs a warning and ignores it.
+- `top1000.txt` corrupt token (`282116379` — two ports merged without a
+  separator) has been split into `28211, 6379`.
 
 ## Dependencies
 
