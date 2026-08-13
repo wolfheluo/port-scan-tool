@@ -141,6 +141,9 @@ KNOWN_FIXES = [
     # mysql -p（互動式密碼提示）→ 溫和模式單一密碼
     (r" -p -P ", " -p{PASSWORD} -P "),
     (r" -p$", " -p{PASSWORD}"),
+    # MySQL 8 預設 TLS：client 驗證不了伺服器憑證會直接 ERROR 2026 卡住測試
+    # 用 --skip-ssl（MySQL 與 MariaDB client 都支援；--ssl-mode 只有 MySQL client 認）
+    (r"^mysql -h \{IP\} -u ", "mysql -h {IP} --skip-ssl -u "),
     # onesixtyone 需要 dict.txt → 改用內建社群字串清單
     (r"onesixtyone -c dict\.txt", "onesixtyone"),
     # openssl s_client 互動 → 包 echo 餵 stdin EOF + timeout 硬上限（993/995 伺服器不關連線會掛 60s）
@@ -308,7 +311,8 @@ PORT_KEYWORDS = {
           "warn": [r"bgp", r"open"]},
     389: {"risk": [],
           "warn": [r"namingContexts", r"ldap", r"dc=", r"rootDSE"]},
-    443: {"risk": [r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)"],
+    443: {"risk": [r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)",
+                   r"TLSv1\.1\s*(enabled|:)"],
           "warn": [r"self-signed", r"not valid after", r"subject", r"accepted",
                    r"least strength", r"tlsv1"]},
     445: {"risk": [r"SMBv1", r"MS17-010", r"VULNERABLE", r"READ", r"WRITE",
@@ -370,7 +374,8 @@ PORT_KEYWORDS = {
     3306: {"risk": [r"VERSION\(", r"^\d+\.\d+", r"login successful"],
            "warn": [r"access denied", r"ERROR 1045", r"mysql"]},
     3389: {"risk": [r"login:\s*\S+\s*password:", r"\[SUCCESS\]",
-                    r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)"],
+                    r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)",
+                    r"TLSv1\.1\s*(enabled|:)"],
            "warn": [r"least strength", r"ntlm", r"rdp"]},
     4369: {"risk": [],
            "warn": [r"erlang", r"rabbitmq"]},
@@ -398,7 +403,8 @@ PORT_KEYWORDS = {
            "warn": [r"HTTP/1\.[01]", r"tomcat", r"jenkins", r"title", r"server:"]},
     8161: {"risk": [],
            "warn": [r"activemq", r"title"]},
-    8443: {"risk": [r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)"],
+    8443: {"risk": [r"SSLv2\s*(enabled|:)", r"SSLv3\s*(enabled|:)", r"TLSv1\.0\s*(enabled|:)",
+                    r"TLSv1\.1\s*(enabled|:)"],
            "warn": [r"self-signed", r"least strength"]},
     8888: {"risk": [],
            "warn": [r"jupyter", r"title"]},
@@ -891,8 +897,10 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
             log_line(log_path, "[%s][%s] SKIP: UDP 掃描需要 root 權限（非 root 環境）" % (port, name))
             return {"port": port, "test": name, "kind": test["kind"], "status": "SKIP",
                     "summary": "UDP 掃描需要 root 權限", "raw": "", "duration": time.time() - t0, "cmd": cmd}
-        # onesixtyone 只接受數字 IP（hostname 會 Malformed IP address）
-        if "onesixtyone" in cmd and not re.match(r"^\d+(\.\d+){3}$", ip):
+        # hydra/nc/onesixtyone 的解析器在並行 DNS 負載下易 EAI_AGAIN / Unknown host
+        # → 目標為 hostname 時預先解析成數字 IP（banner/爆破測試不需要 hostname）
+        if not re.match(r"^\d+(\.\d+){3}$", ip) and any(
+                t in ("nc", "hydra", "onesixtyone") for t in cmd.split()[:4]):
             try:
                 ip = socket.gethostbyname(ip)
             except socket.gaierror:
@@ -1046,7 +1054,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
                              if any(re.search(pat, ln, re.I) for pat in test["warn"])), None) if test["warn"] else None
             if warn_hit:
                 status, summary = "WARN", warn_hit[:140]
-            elif timed_out:
+            elif timed_out or rc == 124:
                 status, summary = "WARN", "逾時(%ds)，輸出已截斷" % timeout
             elif rc != 0:
                 status, summary = "FAIL", "執行失敗(rc=%d)：%s" % (rc, (err or out).strip()[-120:])
