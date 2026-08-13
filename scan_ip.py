@@ -253,7 +253,7 @@ def normalize_cmd(cmd, port, user, password, userlist, passwords, domain, path):
 # risk: 命中 = RISK；warn: 命中 = WARN；皆無 = PASS
 # ---------------------------------------------------------------------------
 GENERIC_KEYWORDS = {
-    "risk": [r"vulnerable", r"CVE-\d{4}", r"login successful", r"\[SUCCESS\]",
+    "risk": [r"(?<!NOT )vulnerable", r"CVE-\d{4}", r"login successful", r"\[SUCCESS\]",
              r"anonymous", r"no auth", r"none auth", r"unauthorized",
              r"public", r"PONG", r"200 OK"],
     "warn": [r"banner", r"version", r"220 ", r"\+OK", r"exists", r"valid",
@@ -269,7 +269,7 @@ PORT_KEYWORDS = {
                   r"ssh-"]},
     23: {"risk": [r"login:\s*\S+\s*password:", r"\[SUCCESS\]", r"login successful"],
          "warn": [r"telnet", r"login:"]},
-    25: {"risk": [r"vulnerable", r"cve-\d{4}-\d+", r"is vulnerable"],
+    25: {"risk": [r"(?<!NOT )vulnerable", r"cve-\d{4}-\d+", r"is vulnerable"],
          "warn": [r"250", r"220 ", r"esmtp", r"smtp", r"exists", r"valid"]},
     53: {"risk": [r"zone transfer was successful", r"transfer successful", r"recursion"],
          "warn": [r"nsid", r"id\.server", r"SOA", r"NS\s", r"records"]},
