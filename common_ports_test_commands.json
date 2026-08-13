@@ -1,0 +1,709 @@
+{
+  "variables": [
+    "IP",
+    "PORT",
+    "DOMAIN",
+    "USER",
+    "PASSWORD",
+    "USERLIST",
+    "PASSWORDS",
+    "PATH"
+  ],
+  "usage": "每個 command 字串可用 .format(IP=..., PORT=..., ...) 展開; msf6> 前綴為 Metasploit 指令",
+  "ports": [
+    {
+      "port": "21",
+      "name": "FTP",
+      "commands": [
+        "hydra -L {USERLIST} -P {PASSWORDS} ftp://{IP} -t 3 -v",
+        "nmap -sV -p 21 --script ftp-anon {IP}"
+      ],
+      "note": "FTP匿名登入測試：使用者名稱輸入「anonymous」，密碼不用提供(直接按enter)，若登入成功代表允許匿名登入，可用ls列舉檔案並截圖。"
+    },
+    {
+      "port": "22",
+      "name": "SSH",
+      "commands": [
+        "hydra -v -V -u -l root -P {PASSWORDS} -t 1 {IP} ssh",
+        "nmap -sV -p 22 --script ssh2-enum-algos {IP}",
+        "msf6> use auxiliary/scanner/ssh/ssh_login",
+        "nmap -sV -p 22 --script ssh2-enum-algos,ssh-auth-methods {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "23",
+      "name": "Telnet",
+      "commands": [
+        "nc -nv {IP} 23",
+        "nmap -sV -p 23 --script telnet-encryption {IP}",
+        "hydra -L {USERLIST} -P {PASSWORDS} telnet://{IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "25",
+      "name": "SMTP",
+      "commands": [
+        "nmap -p25 --script smtp-commands {IP}",
+        "nmap --script=smtp-commands,smtp-enum-users,smtp-vuln-cve2010-4344,smtp-vuln-cve2011-1720,smtp-vuln-cve2011-1764 -p 25 {IP}",
+        "nc -nvc {IP}",
+        "msf6> use auxiliary/scanner/smtp/smtp_enum",
+        "smtp-user-enum -M VRFY -U {USERLIST} -t {IP}",
+        "nmap -p25 --script smtp-commands,smtp-enum-users {IP}",
+        "nc -nvc {IP} 25",
+        "swaks --to test@{DOMAIN} --server {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "53",
+      "name": "DNS",
+      "commands": [
+        "dnsrecon -d {IP} -a",
+        "nmap --script dns-nsid {IP} -p 53",
+        "dnsrecon -d {DOMAIN} -a",
+        "dig AXFR @{IP} {DOMAIN}",
+        "nmap -sU -p 53 --script dns-recursion {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "69",
+      "name": "TFTP",
+      "commands": [
+        "nmap -sU -p 69 --script tftp-enum {IP}",
+        "tftp {IP} 69"
+      ],
+      "note": "TFTP 通常無認證, 可嘗試下載設定檔"
+    },
+    {
+      "port": "80",
+      "name": "HTTP",
+      "commands": [
+        "nmap --script http-title,http-headers,http-methods -p 80,443 {IP}",
+        "curl -I http://{IP}:80"
+      ],
+      "note": ""
+    },
+    {
+      "port": "80,443",
+      "name": "HTTP/HTTPS",
+      "commands": [
+        "nmap --script http-aspnet-debug --script-args http-aspnet-debug.path=/path {IP} -p 443",
+        "nmap --script http-aspnet-debug --script-args http-aspnet-debug.path={PATH} {IP} -p 443",
+        "nmap --script http-title,http-headers,http-methods -p 80,443 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "88",
+      "name": "Kerberos",
+      "commands": [
+        "nmap -sV -p 88 --script krb5-enum-users --script-args krb5-enum-users.realm={DOMAIN} {IP}",
+        "impacket-GetNPUsers.py {DOMAIN}/ -usersfile {USERLIST} -dc-ip {IP} -no-pass"
+      ],
+      "note": ""
+    },
+    {
+      "port": "110",
+      "name": "POP3",
+      "commands": [
+        "nc -ncv {IP} {PORT}",
+        "msf6> use auxiliary/sanner/pop3/pop3_login",
+        "nc -nv {IP} 110",
+        "hydra -L {USERLIST} -P {PASSWORDS} pop3://{IP}",
+        "msf6> use auxiliary/scanner/pop3/pop3_login"
+      ],
+      "note": ""
+    },
+    {
+      "port": "111",
+      "name": "RPC portmapper",
+      "commands": [
+        "rpcclient -U \"\" -N {IP}",
+        "impacket-rpcdump.py {USER}:{PASSWORD}@{IP}",
+        "nmap -sV -p 111 --script rpcinfo {IP}"
+      ],
+      "note": "含 RPC PORT 檢查; 若 111+2049 皆開, 續測 NFS"
+    },
+    {
+      "port": "123",
+      "name": "NTP",
+      "commands": [
+        "nmap -sU -p 123 --script ntp-monlist {IP}",
+        "ntpq -c version {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "135",
+      "name": "MSRPC",
+      "commands": [
+        "nmap --script=msrpc-enum {IP}",
+        "msf6>use auxiliary/scanner/dcerpc/management",
+        "msf6>use auxiliary/scanner/dcerpc/hidden",
+        "msf6> use auxiliary/scanner/dcerpc/management",
+        "msf6> use auxiliary/scanner/dcerpc/hidden"
+      ],
+      "note": ""
+    },
+    {
+      "port": "139",
+      "name": "NetBIOS-SSN",
+      "commands": [
+        "nbtscan-unixwiz -n {IP}",
+        "nbtscan -n {IP}",
+        "nmap -sU -p 137 --script nbstat {IP}",
+        "nmblookup -A {IP}",
+        "smbclient -N -L //{IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "161",
+      "name": "SNMP",
+      "commands": [
+        "nmap -sU -p 161 --script snmp-info,snmp-brute {IP}",
+        "snmp-check {IP}",
+        "onesixtyone -c dict.txt {IP}",
+        "snmpwalk -v2c -c public {IP}"
+      ],
+      "note": "public/private 社群字串為常見弱點"
+    },
+    {
+      "port": "179",
+      "name": "BGP",
+      "commands": [
+        "nmap -sV -p 179 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "389",
+      "name": "LDAP",
+      "commands": [
+        "nmap -p 389 --script ldap-rootdse {IP}",
+        "ldapsearch -x -H ldap://{IP} -b \"\" -s base namingContexts",
+        "ldapsearch -x -H ldap://{IP} -b \"dc=example,dc=com\""
+      ],
+      "note": ""
+    },
+    {
+      "port": "443",
+      "name": "HTTPS",
+      "commands": [
+        "sslscan {IP}or{IP}:{PORT}",
+        "nmap -p 443,8443 -Pn --script ssl-cert  {IP} ->SSL憑證資訊",
+        "nmap -sV --script ssl-enum-ciphers -p 443 {IP}",
+        "sslscan {IP} 或 sslscan {IP}:{PORT}",
+        "nmap -p 443,8443 -Pn --script ssl-cert {IP}",
+        "openssl s_client -connect {IP}:443 -servername {DOMAIN}",
+        "testssl.sh {IP}:443"
+      ],
+      "note": ""
+    },
+    {
+      "port": "445",
+      "name": "SMB",
+      "commands": [
+        "nmap --script smb-os-discovery,smb-protocols {IP}",
+        "smbclient -N -L //{IP}",
+        "smbmap -H {IP}",
+        "nmap --script smb-vuln-ms17-010 -p 445 {IP}",
+        "crackmapexec smb {IP}",
+        "enum4linux -a {IP}"
+      ],
+      "note": "關於第1項，經3次循環實測，若使用smb-os-discovery,smb-protocols，可能會偵測不到「NT LM 0.12 (SMBv1) [dangerous, but default]」，原因未知，可考慮單獨執行smb-protocols。"
+    },
+    {
+      "port": "500",
+      "name": "ISAKMP",
+      "commands": [
+        "ike-scan {IP}"
+      ],
+      "note": "VPN IKE 掃描, 可續用 ike-scan --showbackoff 判斷 PSK"
+    },
+    {
+      "port": "512",
+      "name": "rexec",
+      "commands": [
+        "nc -nv {IP} 512",
+        "rusers -l {IP}"
+      ],
+      "note": "舊版遠端執行/使用者列舉"
+    },
+    {
+      "port": "513",
+      "name": "rlogin",
+      "commands": [
+        "nc -nv {IP} 513",
+        "rlogin -l root {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "514",
+      "name": "syslog/rsh",
+      "commands": [
+        "nc -nv {IP} 514"
+      ],
+      "note": ""
+    },
+    {
+      "port": "515",
+      "name": "LPD",
+      "commands": [
+        "nmap -p 515 --script lpd-info {IP}"
+      ],
+      "note": "印表機 daemon"
+    },
+    {
+      "port": "548",
+      "name": "AFP",
+      "commands": [
+        "nmap -sV -p 548 --script afp-serverinfo {IP}"
+      ],
+      "note": "macOS 檔案分享"
+    },
+    {
+      "port": "623",
+      "name": "IPMI",
+      "commands": [
+        "nmap -sU -p 623 --script ipmi-version {IP}",
+        "ipmitool -I lanplus -H {IP} -U admin -P admin user list"
+      ],
+      "note": "IPMI 2.0 預設 admin/admin; 注意 CVE-2013-4786 雜湊擷取"
+    },
+    {
+      "port": "636",
+      "name": "LDAPS",
+      "commands": [
+        "ldapsearch -x -H ldaps://{IP} -b \"\" -s base namingContexts",
+        "nmap --script ssl-cert -p 636 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "873",
+      "name": "rsync",
+      "commands": [
+        "nmap --script rsync-list-modules -p 873 {IP}",
+        "rsync -av --list-only rsync://{IP}/"
+      ],
+      "note": "列出模組後可嘗試無帳號下載 rsync://{IP}/{模組}"
+    },
+    {
+      "port": "993",
+      "name": "IMAPS",
+      "commands": [
+        "openssl s_client -connect {IP}:993 -quiet",
+        "nmap --script imap-ntlm-info -p 993 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "995",
+      "name": "POP3S",
+      "commands": [
+        "openssl s_client -connect {IP}:995 -quiet"
+      ],
+      "note": ""
+    },
+    {
+      "port": "1080",
+      "name": "SOCKS",
+      "commands": [
+        "nmap --script socks-open-proxy -p 1080 {IP}",
+        "proxychains4 curl -s http://{IP}"
+      ],
+      "note": "開放代理可作為跳板"
+    },
+    {
+      "port": "1099",
+      "name": "Java RMI",
+      "commands": [
+        "nmap -sV -p 1099 --script rmi-vuln-classloader {IP}",
+        "msf6> use exploit/multi/misc/java_rmi_server"
+      ],
+      "note": ""
+    },
+    {
+      "port": "1194",
+      "name": "OpenVPN",
+      "commands": [
+        "nmap -sV -p 1194 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "1352",
+      "name": "Lotus Domino",
+      "commands": [
+        "nmap -p 1352 --script domino-enum-users {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "1433",
+      "name": "MSSQL",
+      "commands": [
+        "msf6> use auxiliary/scanner/mysql/mssql_login",
+        "nmap -p 1433 --script ms-sql-info,ms-sql-empty-password {IP}",
+        "msf6> use auxiliary/scanner/mssql/mssql_login",
+        "impacket-mssqlclient.py sa:{PASSWORD}@{IP}",
+        "sqsh -S {IP} -U sa"
+      ],
+      "note": "sa 空密碼/弱密碼為高風險"
+    },
+    {
+      "port": "1521",
+      "name": "Oracle",
+      "commands": [
+        "msf6> use auxiliary/scanner/oracle/sid_enum",
+        "nmap -p 1521 --script oracle-sid-brute {IP}",
+        "odat.py all -s {IP} -p 1521"
+      ],
+      "note": ""
+    },
+    {
+      "port": "1723",
+      "name": "PPTP",
+      "commands": [
+        "thc-pptp-bruter -u {USER} -w {PASSWORDS} {IP}",
+        "nmap -sV -p 1723 --script pptp-version {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "1883",
+      "name": "MQTT",
+      "commands": [
+        "nmap -p 1883 --script mqtt-subscribe {IP}"
+      ],
+      "note": "無認證 broker 可訂閱所有 topic"
+    },
+    {
+      "port": "2049",
+      "name": "NFS",
+      "commands": [
+        "showmount -e {IP}",
+        "nmap -p 2049 --script nfs-showmount,nfs-ls {IP}"
+      ],
+      "note": "showmount -e 列出匯出目錄, 若 no_root_squash 可寫入"
+    },
+    {
+      "port": "2181",
+      "name": "ZooKeeper",
+      "commands": [
+        "nmap --script zookeeper-info -p 2181 {IP}",
+        "echo envi | nc {IP} 2181"
+      ],
+      "note": ""
+    },
+    {
+      "port": "2375",
+      "name": "Docker API",
+      "commands": [
+        "curl http://{IP}:2375/version",
+        "curl http://{IP}:2375/containers/json",
+        "nmap --script docker-version -p 2375 {IP}"
+      ],
+      "note": "未授權 Docker API = 直接 RCE (掛載 / 即可拿 host)"
+    },
+    {
+      "port": "2379",
+      "name": "etcd",
+      "commands": [
+        "curl http://{IP}:2379/version",
+        "ETCDCTL_API=3 etcdctl --endpoints=http://{IP}:2379 endpoint health"
+      ],
+      "note": "未授權 etcd 可撈 Kubernetes secret"
+    },
+    {
+      "port": "3000",
+      "name": "Grafana",
+      "commands": [
+        "nmap --script http-title -p 3000 {IP}",
+        "curl -s http://{IP}:3000/api/health"
+      ],
+      "note": "預設 admin/admin; CVE-2021-43798 路徑穿越"
+    },
+    {
+      "port": "3128",
+      "name": "Squid proxy",
+      "commands": [
+        "nmap --script http-open-proxy -p 3128 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "3268",
+      "name": "AD Global Catalog",
+      "commands": [
+        "nmap -sV -p 3268,3269 {IP}"
+      ],
+      "note": "AD 全網域目錄, 可配合 LDAP 測試"
+    },
+    {
+      "port": "3306",
+      "name": "MySQL",
+      "commands": [
+        "mysql -h {IP} -u {USER} -p -P 3306",
+        "mysql -h {IP} -u root --skip-password",
+        "nmap -p 3306 --script mysql-empty-password,mysql-enum {IP}",
+        "msf6> use auxiliary/scanner/mysql/mysql_login"
+      ],
+      "note": "root 空密碼/弱密碼為高風險"
+    },
+    {
+      "port": "3389",
+      "name": "RDP",
+      "commands": [
+        "nmap --script ssl-enum-ciphers -p 3389 {IP}",
+        "hydra -t 4 -L {USERLIST} -P {PASSWORDS} rdp://{IP}:3389",
+        "hydra -t 4 -l administrator -P {PASSWORDS} rdp://{IP}:3389",
+        "nmap --script rdp-ntlm-info -p 3389 {IP}",
+        "hydra -t 4 -l {USER} -P {PASSWORDS} rdp://{IP}:3389",
+        "xfreerdp /v:{IP} /u:{USER} /p:{PASSWORD}"
+      ],
+      "note": "注意: 部分平台 3 次失敗即鎖定帳號"
+    },
+    {
+      "port": "4369",
+      "name": "Erlang port mapper",
+      "commands": [
+        "nmap -sV -p 4369 {IP}"
+      ],
+      "note": "RabbitMQ 節點發現"
+    },
+    {
+      "port": "5000",
+      "name": "HTTP alt / Docker registry",
+      "commands": [
+        "nmap --script http-title -p 5000 {IP}",
+        "curl http://{IP}:5000/v2/_catalog"
+      ],
+      "note": ""
+    },
+    {
+      "port": "5060",
+      "name": "SIP",
+      "commands": [
+        "msf6> use auxiliary/scanner/sip/option",
+        "nmap -sU -p 5060 --script sip-enum-users {IP}",
+        "nmap -sU -p 5060 --script sip-methods {IP}",
+        "msf6> use auxiliary/scanner/sip/options"
+      ],
+      "note": "VoIP, 可列舉分機"
+    },
+    {
+      "port": "5432",
+      "name": "PostgreSQL",
+      "commands": [
+        "psql -h {IP} -U postgres",
+        "nmap -p 5432 --script pgsql-brute {IP}",
+        "msf6> use auxiliary/scanner/postgres/postgres_login"
+      ],
+      "note": "postgres/postgres 或 postgres 空密碼常見"
+    },
+    {
+      "port": "5601",
+      "name": "Kibana",
+      "commands": [
+        "curl -s http://{IP}:5601/api/status",
+        "nmap --script http-title -p 5601 {IP}"
+      ],
+      "note": "CVE-2019-7609 可 RCE; 通常與 9200 搭配"
+    },
+    {
+      "port": "5672",
+      "name": "AMQP (RabbitMQ)",
+      "commands": [
+        "nmap --script amqp-info -p 5672 {IP}"
+      ],
+      "note": "預設 guest/guest"
+    },
+    {
+      "port": "5900",
+      "name": "VNC",
+      "commands": [
+        "nmap --script=vnc-info,vnc-title -p 5900 {IP}",
+        "msf6> use auxiliary/scanner/vnc/vnc_none_auth",
+        "msf6> use auxiliary/scanner/vnc/vnc_login",
+        "項目3可將字典檔置換為簡易字典",
+        "vncviewer {IP}"
+      ],
+      "note": "無認證 VNC 可直接連入"
+    },
+    {
+      "port": "5985",
+      "name": "WinRM",
+      "commands": [
+        "msf6 > use linux/misc/cve_2021_38647_omigod",
+        "evil-winrm -i {IP} -u {USER} -p {PASSWORD}",
+        "msf6> use auxiliary/scanner/winrm/winrm_login",
+        "nmap --script winrm-info -p 5985 {IP}",
+        "nmap -p 5985,5986 --script http-vuln-cve2021-38647 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "6379",
+      "name": "Redis",
+      "commands": [
+        "redis-cli -h {IP} -p 6379",
+        "redis-cli -h {IP} -p 6379 info",
+        "nmap --script redis-info -p 6379 {IP}",
+        "msf6> use auxiliary/scanner/redis/redis_login"
+      ],
+      "note": "未授權 Redis 可寫 crontab/ssh key 拿 RCE"
+    },
+    {
+      "port": "7001",
+      "name": "WebLogic",
+      "commands": [
+        "nmap --script http-title -p 7001 {IP}",
+        "curl http://{IP}:7001/console/login/LoginForm.jsp"
+      ],
+      "note": "console 弱密碼; 大量反序列化 CVE"
+    },
+    {
+      "port": "8009",
+      "name": "AJP",
+      "commands": [
+        "nmap -p 8009 --script ajp-headers {IP}",
+        "msf6> use auxiliary/scanner/http/ajp_requests"
+      ],
+      "note": "Ghostcat 可讀 webapp 原始碼"
+    },
+    {
+      "port": "8080",
+      "name": "HTTP alt",
+      "commands": [
+        "nmap --script http-title,http-methods -p 8080 {IP}",
+        "curl -I http://{IP}:8080"
+      ],
+      "note": "Tomcat/Jenkins 等常見管理介面"
+    },
+    {
+      "port": "8161",
+      "name": "ActiveMQ",
+      "commands": [
+        "nmap -p 8161 --script http-title {IP}",
+        "curl http://{IP}:8161/admin"
+      ],
+      "note": ""
+    },
+    {
+      "port": "8443",
+      "name": "HTTPS alt",
+      "commands": [
+        "sslscan {IP}:8443",
+        "nmap --script ssl-enum-ciphers -p 8443 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "8888",
+      "name": "Jupyter / HTTP alt",
+      "commands": [
+        "nmap --script http-title -p 8888 {IP}",
+        "curl http://{IP}:8888/api"
+      ],
+      "note": ""
+    },
+    {
+      "port": "9000",
+      "name": "HTTP alt",
+      "commands": [
+        "nmap --script http-title -p 9000 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "9080",
+      "name": "JBoss",
+      "commands": [
+        "msf6> use scanner/http/jboss_vulnscan",
+        "msf6> use auxiliary/scanner/http/jboss_vulnscan",
+        "nmap --script http-title -p 9080 {IP}"
+      ],
+      "note": "jmx-console/web-console 未授權為高風險"
+    },
+    {
+      "port": "9092",
+      "name": "Kafka",
+      "commands": [
+        "nmap --script kafka-info -p 9092 {IP}"
+      ],
+      "note": ""
+    },
+    {
+      "port": "9200",
+      "name": "Elasticsearch",
+      "commands": [
+        "curl http://{IP}:9200/",
+        "curl http://{IP}:9200/_cat/indices",
+        "nmap --script elasticsearch-info -p 9200 {IP}"
+      ],
+      "note": "未授權 ES 可撈所有 index 資料"
+    },
+    {
+      "port": "10000",
+      "name": "Webmin",
+      "commands": [
+        "nmap --script http-title -p 10000 {IP}",
+        "msf6> use auxiliary/scanner/http/webmin_login"
+      ],
+      "note": ""
+    },
+    {
+      "port": "11211",
+      "name": "Memcached",
+      "commands": [
+        "nmap --script memcached-info -p 11211 {IP}",
+        "printf 'stats\\nquit\\n' | nc {IP} 11211"
+      ],
+      "note": "未授權 memcached 可放大攻擊 / 讀快取"
+    },
+    {
+      "port": "27017",
+      "name": "MongoDB",
+      "commands": [
+        "nmap --script mongodb-info -p 27017 {IP}",
+        "mongosh \"mongodb://{IP}:27017\"",
+        "msf6> use auxiliary/scanner/mongodb/mongodb_login"
+      ],
+      "note": "未授權 MongoDB 可直接 dump 資料庫"
+    },
+    {
+      "port": "50070",
+      "name": "Hadoop NameNode",
+      "commands": [
+        "curl http://{IP}:50070/dfshealth.html"
+      ],
+      "note": ""
+    },
+    {
+      "port": "61616",
+      "name": "ActiveMQ OpenWire",
+      "commands": [
+        "nmap -sV -p 61616 {IP}"
+      ],
+      "note": "配合 8161 使用"
+    },
+    {
+      "port": "HTTP TRACE",
+      "name": "HTTP TRACE/TRACK",
+      "commands": [
+        "telnet {IP} {PORT}",
+        "TRACE / HTTP/1.1",
+        "Host: localhost.localdomain",
+        "(再連續按兩下 Enter; 若回應 HTTP/1.1 200 OK 表示允許 TRACE)",
+        "修補: Apache httpd.conf 加 TraceEnable off 後 service httpd restart"
+      ],
+      "note": ""
+    }
+  ]
+}
