@@ -331,7 +331,7 @@ PORT_KEYWORDS = {
           "warn": [r"ipmi", r"version"]},
     636: {"risk": [],
           "warn": [r"namingContexts", r"ldap", r"subject", r"ssl"]},
-    873: {"risk": [r"writable", r"@"],
+    873: {"risk": [r"writable", r"\S+@\S+"],
           "warn": [r"rsync", r"module"]},
     993: {"risk": [],
           "warn": [r"ssl", r"imap", r"subject"]},
@@ -620,18 +620,22 @@ def scan_ports(ip, log_path, full_port, groups):
     # top1000.txt：僅作 nmap 不可用時的 Python connect fallback 埠清單
     fallback_ports = set()
     bad_tokens = []
-    with open(BASE / "top1000.txt", encoding="utf-8") as f:
-        for chunk in f:
-            for x in chunk.split(","):
-                x = x.strip()
-                if not x:
-                    continue
-                if x.isdigit() and 0 <= int(x) <= 65535:
-                    fallback_ports.add(int(x))
-                else:
-                    bad_tokens.append(x)
-    if bad_tokens:
-        log_line(log_path, "警告: top1000.txt 含無效 port token（已忽略）: %s" % ", ".join(bad_tokens[:5]))
+    top1000 = BASE / "top1000.txt"
+    if not top1000.is_file():
+        log_line(log_path, "警告: 缺少 %s（僅影響 nmap 不可用時的 fallback 掃描）" % top1000)
+    else:
+        with open(top1000, encoding="utf-8") as f:
+            for chunk in f:
+                for x in chunk.split(","):
+                    x = x.strip()
+                    if not x:
+                        continue
+                    if x.isdigit() and 0 <= int(x) <= 65535:
+                        fallback_ports.add(int(x))
+                    else:
+                        bad_tokens.append(x)
+        if bad_tokens:
+            log_line(log_path, "警告: top1000.txt 含無效 port token（已忽略）: %s" % ", ".join(bad_tokens[:5]))
     fallback_ports |= table_ports
 
     udp_ports = set()
@@ -805,6 +809,22 @@ def _killpg(proc):
         pass
 
 
+def _missing_bin_in_cmd(cmd_str, missing_bins):
+    """管線/多段指令中任一 binary 缺失即回傳該 binary；全部存在回傳 None。"""
+    for seg in re.split(r"[|<>;&]", cmd_str):
+        toks = seg.split()
+        while toks and "=" in toks[0] and not toks[0].startswith(("-", "/", "{")):
+            toks.pop(0)  # env 前綴（VAR=val cmd）
+        if toks and toks[0] == "timeout" and len(toks) > 2 and toks[1].isdigit():
+            toks = toks[2:]  # timeout N 包裝
+        if not toks:
+            continue
+        b = toks[0].split("/")[-1]
+        if b in missing_bins and b not in FALLBACK_BIN:
+            return b
+    return None
+
+
 def _safe_run(ip, port, test, cfg, missing_bins, out_dir, log_path):
     """run_one 的頂層兜底：任何未預期例外轉成 FAIL 結果，不讓整個掃描中止。"""
     try:
@@ -916,7 +936,13 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
     if test.get("mod"):
         bin0 = "msfconsole"
     elif argv and argv[0] == "bash" and len(argv) > 2:
-        bin0 = argv[2].split()[0].split("/")[-1]
+        # bash -c 包裝：檢查管線內所有 binary（echo | openssl ... 的 openssl 也要查）
+        miss = _missing_bin_in_cmd(argv[2], missing_bins)
+        if miss:
+            log_line(log_path, "[%s][%s] SKIP: 工具缺失 %s" % (port, name, miss))
+            return {"port": port, "test": name, "kind": test["kind"], "status": "SKIP",
+                    "summary": "工具缺失: %s" % miss, "raw": "", "duration": time.time() - t0, "cmd": cmd}
+        bin0 = "bash"
     else:
         bin0 = argv[0].split("/")[-1] if argv else "?"
     if bin0 == "timeout" and len(argv) >= 3:
@@ -1244,14 +1270,23 @@ def main():
 
     # 4. 執行
     results = []
-    with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
-        futs = {ex.submit(_safe_run, ip, port, t, cfg, missing_bins, out_dir, log_path): (port, t["name"])
-                for port, t in jobs}
-        try:
-            for fut in as_completed(futs):
-                results.append(fut.result())
-        except KeyboardInterrupt:
-            log_line(log_path, "!!! 使用者中斷，輸出部分結果 !!!")
+    ex = ThreadPoolExecutor(max_workers=max(1, args.jobs))
+    futs = {ex.submit(_safe_run, ip, port, t, cfg, missing_bins, out_dir, log_path): (port, t["name"])
+            for port, t in jobs}
+    try:
+        for fut in as_completed(futs):
+            results.append(fut.result())
+    except KeyboardInterrupt:
+        log_line(log_path, "!!! 使用者中斷，輸出部分結果 !!!")
+        ex.shutdown(wait=False, cancel_futures=True)  # 取消未開始的測試，不等待
+        for fut in futs:
+            if fut.done() and not fut.cancelled():
+                try:
+                    results.append(fut.result())
+                except Exception:
+                    pass
+    else:
+        ex.shutdown(wait=True)
 
     # 5. 結果統計 + 產出
     stats = {"total": len(results), "RISK": 0, "WARN": 0, "PASS": 0, "FAIL": 0, "SKIP": 0}

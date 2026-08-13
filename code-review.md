@@ -125,7 +125,11 @@
 | **L3 timed_out 未重置** | 重試成功仍判逾時、逾時輸出吞掉 RISK | ✅ 已修 — 每次嘗試獨立旗標 + 有輸出先跑關鍵字匹配 |
 | **L4 載入失敗不判 FAIL** | 模組缺失落入關鍵字判讀 (假陰性) | ✅ 已修 — failed to load module 等加入 FAIL 判別 |
 | **L5 200 OK 假陽性** | 正常網站每條 HTTP 測試必 RISK | ✅ 已修 — 200 OK 從 GENERIC/80/8080 risk 移入 warn |
+| **L6 bash 包裝 bin0** | 管線內真實 binary 不在缺工具檢查範圍 | ✅ 已修 — _missing_bin_in_cmd 檢查管線內所有 binary |
+| **L7 Ctrl-C 即時性** | 中斷等待 in-flight 測試、結果殘缺 | ✅ 已修 — shutdown(cancel_futures=True, wait=False) + 收集已完成結果 |
+| **L8 top1000 防護** | 檔案缺失直接崩潰 | ✅ 已修 — is_file 檢查, 缺失僅警告 |
 | **L9 fallback 崩潰** | fb_* 未捕 socket 錯誤 → 全掃描中止 | ✅ 已修 — fb_* 內部捕 OSError + run_one 捕 OSError + _safe_run 頂層兜底 |
+| **L10 rsync @** | 裸 @ 接近隨機命中 | ✅ 已修 — 改 \S+@\S+ |
 | 溫和模式帳密互換 | hydra -L/-P、msf USER_FILE/PASS_FILE 全裝反 | ✅ 已修 + 單元測試 |
 | nc -n + hostname | 4 個測試 Can't parse IP | ✅ 已修 |
 | 非 root UDP | 8 個 -sU 測試誤判 FAIL | ✅ 改 SKIP |
@@ -148,7 +152,5 @@
 
 - **整體架構**: 良好。職責分離清楚 (轉換層/執行層/判讀層), 併發處理正確, exploit 安全邊界確實生效, 多輪實測 (含真實目標) 穩定產出完整 artifacts。
 - **Verdict (獨立 reviewer 初審)**: not passed — 1 個 HIGH 注入面 + 多處邏輯缺陷。
-- **覆審狀態**: 初審列出的優先三項 (S1 注入面 / L1 killpg / L9 fallback 兜底) 與第二輪 L2–L5 (msf 重試判定 / timed_out 重置 / 載入失敗判 FAIL / 200 OK 假陽性) **已全部修復**, 經單元測試 + bash -n 語法驗證 + 本機 E2E 冒煙測試 (redis PONG → RISK、msf 正常執行無誤觸發重試、nc 8s 內完成、FAIL 0)。
-- **剩餘待辦** (均非阻斷):
-  1. L6 bash 包裝 bin0 提取 / L7 Ctrl-C 即時性 / L8 top1000 防護 / L10 rsync @
-  2. 第五節 N1–N7 強化建議
+- **覆審狀態**: 初審與複審列出的 S1、L1–L10 **已全部修復**, 經單元測試 + bash -n 語法驗證 + 本機 E2E 冒煙測試 (redis PONG → RISK、msf 正常執行無誤觸發重試、nc 8s 內完成、FAIL 0)。
+- **剩餘待辦** (均非阻斷): 第五節 N1–N7 強化建議 (mongo ok 錨定、每階段獨立 try、3306 版本 banner 移 warn、PTR 快取、s_client -brief、top1000 註明、確認畫面印預估時間)
