@@ -1,38 +1,47 @@
-# scan_ip.py — Single-IP Port Risk Scanner
+# scan_ip.py — Single-IP Port Risk Scanner (JSON Library Driven)
 
-An automated penetration-testing utility derived from the
-`網頁&滲透風險說明表 - 常見port 說明.csv` ("Web & Penetration Risk Description
-Table — Common Ports") maintained by the author. Given a single IP address,
-the tool detects open ports, executes the service-specific tests defined in
-the table, grades each result, and produces a complete audit trail for
-subsequent offline analysis.
+An automated penetration-testing utility driven by a JSON command library
+(`common_ports_test_commands.json`, 72 ports × 190 commands). Given a single
+IP address, the tool detects open ports, executes the service-specific tests
+defined in the library, grades each result, and produces a complete audit
+trail for subsequent offline analysis.
 
 ## Workflow
 
 1. **Preflight** — verifies required binaries; missing tools are installed
    automatically via `apt-get install` (skippable with `--no-install`). Tests
-   whose binary remains unavailable are skipped and logged as `WARN`.
-2. **Target confirmation** — prints the target, the number of open ports, and
-   the number of tests to be executed, then waits for `Enter` before
-   proceeding (interactive sessions only; non-interactive sessions continue
-   automatically).
-3. **Scanning** — `nmap -Pn -T4 --top-ports 1000` enumerates open TCP ports.
-   Ports outside the test table are fingerprinted with
+   whose binary remains unavailable (e.g. Kali-only tools) are skipped and
+   logged as `SKIP`.
+2. **Library loading & conversion** — loads the JSON command library and
+   applies a conversion layer:
+   - `msf6>` prefixes are parsed into `msfconsole -q -x` invocations.
+   - Placeholders (`{IP}`, `{PORT}`, `{DOMAIN}`, `{USER}`, `{PASSWORD}`,
+     `{USERLIST}`, `{PASSWORDS}`, `{PATH}`) are filled at runtime.
+   - Known typos in the source table are corrected (each logged as
+     "表格原文 vs 修正後").
+   - msf modules that fail to load are retried with automatic fixes
+     (`auxiliary/` prefix, common misspellings).
+3. **Scanning** — `nmap -Pn -sT -T4` enumerates TCP ports
+   (top-1000 ∪ table ports ∪ web ports; `--full-port` switches to `-p-`).
+   UDP ports referenced by the library (`-sU` commands) are probed
+   point-targeted. Ports outside the table are fingerprinted with
    `nmap -sV --version-light` and recorded as "open with no matching test".
 4. **Execution** — tests are dispatched per open port with configurable
    parallelism (`--jobs 4` by default). Every log line carries an
    `[HH:MM:SS][port][test]` prefix for post-hoc correlation.
-5. **Grading** — each test is classified as one of:
-   - `RISK` — a security-relevant finding (e.g. anonymous FTP login, SMB null
-     session, weak TLS protocol, unauthenticated Redis, HTTP TRACE enabled).
-   - `WARN` — informational exposure (banner, version, user enumeration, OS
-     fingerprint).
+5. **Grading** — each test is classified by a per-port keyword table:
+   - `RISK` — security-relevant finding (e.g. HTTP TRACE enabled, anonymous
+     FTP, SMBv1, weak TLS, unauthenticated Redis PONG, MS17-010).
+   - `WARN` — informational exposure (banner, version, user enumeration).
    - `PASS` — no anomalous output.
-   - `SKIP` — test not executed (missing tool or missing wordlist).
+   - `FAIL` — command failed to execute (rc≠0, timeout with no output,
+     missing script/module).
+   - `SKIP` — test not executed (exploit module, missing tool, no PTR
+     reverse for `{DOMAIN}`, GUI tool in headless environment).
 6. **Artifacts** — written to `runs/<YYYYMMDD_HHMMSS>_<IP>/`:
    - `scan.log` — chronological audit trail of every command and outcome.
    - `results.json` — structured machine-readable results.
-   - `summary.txt` — human-readable summary (RISK/WARN/SKIP lists, open ports).
+   - `summary.txt` — human-readable summary (RISK/WARN/FAIL/SKIP lists).
    - `raw/<port>_<test>.txt` — full raw output of each test (evidence).
 
 ## Usage
@@ -43,70 +52,90 @@ python3 scan_ip.py <IP> [options]
 
 | Option | Default | Description |
 |---|---|---|
-| `--wordlist FILE` | `wordlist.txt` | Password list for brute-force tests. |
+| `--wordlist FILE` | `wordlist.txt` | Password list for brute-force tests (`--brute` mode). |
 | `--userlist FILE` | `userlist.txt` | Username list for brute-force/enumeration tests. |
 | `--jobs N` | `4` | Number of parallel test workers. |
-| `--timeout N` | graded | Override per-test timeout (seconds). Defaults: detect 60, scan 120, brute 300. |
+| `--timeout N` | graded | Override per-test timeout (seconds). |
 | `--no-install` | off | Do not auto-install missing tools via apt. |
 | `--out DIR` | `runs/` | Output root directory. |
+| `--brute` | off | Full-wordlist brute force (default: single credential pair). |
+| `--user U` | `admin` | Single username for gentle-mode brute attempts. |
+| `--password P` | `password` | Single password for gentle-mode brute attempts. |
+| `--full-port` | off | Full TCP scan `-p-` (default: top1000+table union). |
+| `--table FILE` | `/root/common_ports_test_commands.json` | JSON command library path. |
+| `--dry-run` | off | Validate all library commands are executable without targeting a host. |
+
+### Modes
+
+- **Gentle (default)** — brute-force commands try a single credential pair
+  (`--user/--password`). The library's wordlist placeholders are pointed at
+  one-line temp files, so hydra/msf/thc-pptp-bruter all attempt exactly one
+  combination.
+- **Brute (`--brute`)** — brute-force commands load the full
+  `--wordlist/--userlist`.
+- **Dry-run (`--dry-run`)** — verifies every library command's binary exists
+  and every msf module loads (batched in a single msfconsole session),
+  producing `dryrun_report.txt` without touching a target.
 
 ## Covered Services
 
-FTP (21), SSH (22), SMTP (25), DNS (53), POP3 (110), DCE/RPC (135),
-NetBIOS (139), HTTPS (443), SMB (445), RPC dynamic range (49152–65535),
-MSSQL (1433), Oracle (1521), PPTP (1723), MySQL (3306), RDP (3389),
-SIP (5060), VNC (5900), WinRM (5985), Redis (6379), JBoss (9080),
-ASP.NET debug (80/443), HTTP TRACE/TRACK, Portmapper (111), NFS (2049).
+FTP (21), SSH (22), Telnet (23), SMTP (25), DNS (53), TFTP (69), HTTP (80),
+Kerberos (88), POP3 (110), Portmapper (111), NTP (123), MSRPC (135),
+NetBIOS (139), SNMP (161), BGP (179), LDAP (389), HTTPS (443), SMB (445),
+ISAKMP (500), r* services (512-514), LPD (515), AFP (548), IPMI (623),
+LDAPS (636), rsync (873), IMAPS (993), POP3S (995), SOCKS (1080),
+Java RMI (1099), OpenVPN (1194), Lotus Domino (1352), MSSQL (1433),
+Oracle (1521), PPTP (1723), MQTT (1883), NFS (2049), ZooKeeper (2181),
+Docker API (2375), etcd (2379), Grafana (3000), Squid (3128),
+AD Global Catalog (3268), MySQL (3306), RDP (3389), Erlang (4369),
+HTTP alt (5000), SIP (5060), PostgreSQL (5432), Kibana (5601),
+AMQP (5672), VNC (5900), WinRM (5985), Redis (6379), WebLogic (7001),
+AJP (8009), HTTP alt (8080), ActiveMQ (8161), HTTPS alt (8443),
+Jupyter (8888), HTTP alt (9000), JBoss (9080), Kafka (9092),
+Elasticsearch (9200), Webmin (10000), Memcached (11211), MongoDB (27017),
+Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
 
-## Deviations from the Source Table
+## Safety Boundaries
 
-The source table is a human-oriented reference and contains several
-instructions that are not directly executable. The following corrections are
-applied (each logged under "表格原文" for traceability):
-
-- `auxiliary/sanner/pop3/pop3_login` → `auxiliary/scanner/pop3/pop3_login`
-  (typo in module path).
-- `auxiliary/scanner/mysql/mssql_login` → `auxiliary/scanner/mssql/mssql_login`
-  (module resides under the mssql scanner tree).
-- `scanner/http/jboss_vulnscan` → `auxiliary/scanner/http/jboss_vulnscan`
-  (missing `auxiliary/` prefix).
-- `auxiliary/scanner/sip/option` → `auxiliary/scanner/sip/options`
-  (module name).
-- `nmap --script=msrpc-enum` → `msrpc-enum-users` (the former script does not
-  exist in nmap).
-- `nbtscan-unixwiz -n` → `nbtscan` (the Debian package ships `nbtscan`).
-- `rpcdump.py` → `impacket-rpcdump` (equivalent Impacket tool).
-- Port 5985: the table cites the `cve_2021_38647_omigod` **exploit** module.
-  This tool deliberately performs **detection only** (WS-Man probe) and never
-  fires an exploit.
-- HTTP TRACE is probed with `curl -X TRACE` instead of an interactive
-  `telnet` session.
-- Hydra invocations are normalized (`-L/-P` list files, `-f` to stop at the
-  first credential pair).
-
-## Operational Boundaries
-
-- Single IP only; CIDR/range input is out of scope by design.
-- TCP scanning only (top-1000). UDP tests are limited to the DNS NSID probe;
-  full UDP coverage requires a separate scan.
-- Brute-force tests execute only when a wordlist is available; the bundled
-  `wordlist.txt` is a minimal weak-password list intended as a starting point.
-- The tool never writes to, modifies, or deletes anything on the target; it is
-  purely observational.
-- Exploit modules are never executed.
+- **Exploit modules are never executed.** Modules such as
+  `exploit/multi/misc/java_rmi_server` and
+  `linux/misc/cve_2021_38647_omigod` are classified as exploit and skipped
+  with a `SKIP` result.
+- The tool never writes to, modifies, or deletes anything on the target; it
+  is purely observational.
+- Brute-force is single-credential by default; full wordlists require an
+  explicit `--brute` flag.
+- GUI tools (`vncviewer`, `xfreerdp`) are skipped in headless environments.
 
 ## Verification
 
-End-to-end verification was performed against a local harness
-(`test_server.py`) exposing simulated SMTP, POP3, Redis, HTTP (TRACE-enabled),
-and an unclassified banner port on `127.0.0.1`, exercising the full
-pipeline: preflight tool installation, nmap discovery, test dispatch,
-grading, and artifact generation.
+- **Dry-run** — all 190 library commands verified: 43 binaries present,
+  18/18 msf modules load successfully. 4 Kali-only tools without apt
+  packages (snmp-check, odat.py, mongosh, testssl.sh) are SKIP-listed.
+- **End-to-end** — verified against a local harness (`test_server.py`)
+  exposing simulated SMTP, POP3, Redis, HTTP (TRACE-enabled), and an
+  unclassified banner port on `127.0.0.1`:
+  - 5 ports detected, 20 tests dispatched, `FAIL 0`.
+  - `http-trace` correctly graded `RISK` (HTTP/1.1 200 OK to TRACE).
+  - SMTP/POP3 banners graded `WARN`; msf login modules `PASS`.
+  - "NOT VULNERABLE" negative output correctly excluded from RISK.
+  - `runs/` artifacts complete (scan.log, results.json, summary.txt, raw/).
+
+## Known Issues
+
+- hydra's POP3 module hangs against the simulated `test_server.py` POP3
+  service in docker (waits for connection close after `-ERR`); real POP3
+  servers close the connection on auth failure, so this is a harness-only
+  limitation.
+- `top1000.txt` contains one corrupt token (`282116379` — two ports merged);
+  the scanner logs a warning and ignores it.
 
 ## Dependencies
 
-Python 3 standard library only (no pip packages). External tools are
-detected at runtime and installed on demand: nmap, nc, hydra, sslscan,
-smbclient, smbmap, rpcclient, mysql, dnsrecon, msfconsole,
-impacket-rpcdump, curl, masscan, redis-tools, nbtscan, smtp-user-enum,
-thc-pptp-bruter, nfs-common.
+Python 3 standard library only (no pip packages). External tools detected at
+runtime and installed on demand: nmap, nc, hydra, sslscan, smbclient, smbmap,
+rpcclient, mysql, dnsrecon, msfconsole, impacket-rpcdump, curl, masscan,
+redis-tools, nbtscan, smtp-user-enum, thc-pptp-bruter, nfs-common, snmp,
+tftp-hpa, ntpsec, ldap-utils, dnsutils, samba-common-bin, postgresql-client,
+sqsh, ipmitool, etcd-client, tigervnc-viewer, freerdp3-x11, rsh-redone-client,
+rusers, onesixtyone, ike-scan, proxychains4, swaks, python3-impacket.
