@@ -67,7 +67,7 @@ FTP (21)、SSH (22)、Telnet (23)、SMTP (25)、DNS (53)、TFTP (69)、HTTP (80)
 - **exploit 模組預設會執行**（`java_rmi_server`、`cve_2021_38647_omigod` 等）。加 `--no-exploit` 可改為一律 `SKIP`。
 - 觀測型測試絕不寫入、修改或刪除目標上的任何東西（執行 exploit 模組時的影響屬模組本身行為）。
 - 爆破預設載入完整字典（`password.txt` + `userlist.txt`）；只要單一帳密請加 `--gentle`。
-- GUI 工具（`vncviewer`、`xfreerdp`）在 headless 環境自動 SKIP。
+- GUI 工具（`vncviewer`、`xfreerdp3`）在 headless 環境自動 SKIP。
 
 ## 驗證
 

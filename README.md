@@ -113,7 +113,7 @@ Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
   tests are read-only.
 - Brute-force loads the full password lists (`password.txt` + `userlist.txt`)
   by default; pass `--gentle` for a single credential pair.
-- GUI tools (`vncviewer`, `xfreerdp`) are skipped in headless environments.
+- GUI tools (`vncviewer`, `xfreerdp3`) are skipped in headless environments.
 
 ## Verification
 

@@ -86,7 +86,7 @@ TOOL_PACKAGES = {
     "ldapsearch": "ldap-utils", "dig": "dnsutils", "nmblookup": "samba-common-bin",
     "psql": "postgresql-client", "sqsh": "sqsh", "ipmitool": "ipmitool",
     "etcdctl": "etcd-client", "vncviewer": "tigervnc-viewer",
-    "xfreerdp": "freerdp3-x11", "rlogin": "rsh-redone-client",
+    "xfreerdp3": "freerdp3-x11",
     "rusers": "rusers", "onesixtyone": "onesixtyone", "ike-scan": "ike-scan",
     "proxychains4": "proxychains4", "swaks": "swaks",
     "impacket-rpcdump": "python3-impacket",
@@ -104,10 +104,10 @@ TIMEOUTS = {"detect": 60, "scan": 120, "brute": 300, "interactive": 25}
 WEB_PORTS = {80, 443, 8080, 8443, 8000, 8888, 9080, 3000, 5000, 9090, 7001, 8161, 9000, 10000}
 
 # 互動式工具（stdin 等待）→ 歸類 interactive，縮短 timeout
-INTERACTIVE_BINS = {"sqsh", "psql", "tftp", "rlogin", "telnet", "vncviewer", "xfreerdp", "mongosh"}
+INTERACTIVE_BINS = {"sqsh", "psql", "tftp", "rlogin", "telnet", "vncviewer", "xfreerdp3", "mongosh"}
 
 # 需圖形環境的工具（headless 直接 SKIP）
-GUI_BINS = {"vncviewer", "xfreerdp"}
+GUI_BINS = {"vncviewer", "xfreerdp3"}
 
 # ---------------------------------------------------------------------------
 # 已知修正（對照舊版 scan_ip README「Deviations from the Source Table」）
@@ -586,6 +586,7 @@ KALI_APT = {
     "dnsrecon": ["dnsrecon"],
     "telnet": ["telnet"],
     "snmp-check": ["snmpcheck"],
+    "rlogin": ["rsh-redone-client", "rsh-client"],
 }
 
 # 無 apt 來源 → 特殊安裝函式
@@ -718,20 +719,20 @@ def install_tools_main(check_only=False):
     print("  將以 apt 安裝: %s" % (", ".join(apt_missing) or "（無）"))
     print("  將以特殊來源安裝: %s" % (", ".join(special) or "（無）"))
 
-    # apt 安裝
-    pkgs = set()
+    # apt 安裝（依序嘗試候選套件，第一個成功即停）
+    _run_install_cmd(_sudo_cmd(["apt-get", "update", "-qq"]), timeout=600)
+    installed_pkgs = set()
     for b in apt_missing:
         cands = TOOL_PACKAGES.get(b) or KALI_APT.get(b) or []
         if isinstance(cands, str):
             cands = [cands]
         for c in cands:
-            pkgs.add(c)
-    pkgs.discard(None)
-    if pkgs:
-        print("[install] apt 套件: %s" % ", ".join(sorted(pkgs)), flush=True)
-        _run_install_cmd(_sudo_cmd(["apt-get", "update", "-qq"]), timeout=600)
-        _run_install_cmd(_sudo_cmd(["apt-get", "install", "-y"] + sorted(pkgs)),
-                         timeout=1200)
+            if not c or c in installed_pkgs:
+                continue
+            r = _run_install_cmd(_sudo_cmd(["apt-get", "install", "-y", c]), timeout=600)
+            if r.returncode == 0:
+                installed_pkgs.add(c)
+                break
 
     # 特殊來源
     for b in special:
@@ -765,9 +766,16 @@ def preflight(no_install, log_path):
     if no_install:
         log_line(log_path, "工具檢查: 缺少 %s（--no-install 已指定，相關測試將跳過）" % ", ".join(missing))
         return set(missing)
-    pkgs = sorted({TOOL_PACKAGES[b] for b in install_missing if TOOL_PACKAGES.get(b)})
+    pkgs = set()
+    for b in install_missing:
+        cands = TOOL_PACKAGES.get(b) or KALI_APT.get(b) or []
+        if isinstance(cands, str):
+            cands = [cands]
+        for c in cands:
+            if c:
+                pkgs.add(c)
     log_line(log_path, "工具檢查: 缺少 %s，開始自動安裝（套件: %s）" % (
-        ", ".join(install_missing), ", ".join(pkgs) or "無對應套件"))
+        ", ".join(install_missing), ", ".join(sorted(pkgs)) or "無對應套件"))
     if pkgs and os.geteuid() != 0:
         log_line(log_path, "非 root，無法自動安裝；相關測試將跳過")
         return set(install_missing)
@@ -778,17 +786,23 @@ def preflight(no_install, log_path):
             log_line(log_path, "apt-get update 結束 code=%d" % r.returncode)
         except subprocess.TimeoutExpired:
             log_line(log_path, "apt-get update 逾時，續行安裝（可能失敗）")
-        for pkg in pkgs:
-            try:
-                r = subprocess.run(["apt-get", "install", "-y", pkg],
-                                   capture_output=True, text=True, timeout=300)
-                if r.returncode == 0:
-                    log_line(log_path, "已安裝套件: %s" % pkg)
-                else:
+        for b in install_missing:
+            cands = TOOL_PACKAGES.get(b) or KALI_APT.get(b) or []
+            if isinstance(cands, str):
+                cands = [cands]
+            for pkg in cands:
+                if not pkg:
+                    continue
+                try:
+                    r = subprocess.run(["apt-get", "install", "-y", pkg],
+                                       capture_output=True, text=True, timeout=300)
+                    if r.returncode == 0:
+                        log_line(log_path, "已安裝套件: %s（%s）" % (pkg, b))
+                        break
                     log_line(log_path, "安裝失敗 %s (code=%d): %s" % (
                         pkg, r.returncode, (r.stderr or r.stdout).strip()[-200:]))
-            except subprocess.TimeoutExpired:
-                log_line(log_path, "安裝 %s 逾時" % pkg)
+                except subprocess.TimeoutExpired:
+                    log_line(log_path, "安裝 %s 逾時" % pkg)
     still_missing = {b for b in missing if shutil.which(b) is None}
     for b in sorted(still_missing):
         log_line(log_path, "工具 %s 仍缺失 → 相關測試跳過 (WARN)" % b)

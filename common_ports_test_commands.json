@@ -465,7 +465,7 @@
         "hydra -t 4 -l administrator -P {PASSWORDS} rdp://{IP}:3389",
         "nmap --script rdp-ntlm-info -p 3389 {IP}",
         "hydra -t 4 -l {USER} -P {PASSWORDS} rdp://{IP}:3389",
-        "xfreerdp /v:{IP} /u:{USER} /p:{PASSWORD}"
+        "xfreerdp3 /v:{IP} /u:{USER} /p:{PASSWORD}"
       ],
       "note": "注意: 部分平台 3 次失敗即鎖定帳號"
     },
