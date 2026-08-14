@@ -57,15 +57,15 @@ python3 scan_ip.py <IP> [options]
 
 | Option | Default | Description |
 |---|---|---|
-| `--wordlist FILE` | `wordlist.txt` | Password list for brute-force tests (`--brute` mode). |
+| `--passwords FILE` | `password.txt` | Password list for brute-force tests (default: full list). |
 | `--userlist FILE` | `userlist.txt` | Username list for brute-force/enumeration tests. |
 | `--jobs N` | `4` | Number of parallel test workers. |
 | `--timeout N` | graded | Override per-test timeout (seconds). |
 | `--no-install` | off | Do not auto-install missing tools via apt. |
 | `--out DIR` | `runs/` | Output root directory. |
-| `--brute` | off | Full-wordlist brute force (default: single credential pair). |
-| `--user U` | `admin` | Single username for gentle-mode brute attempts. |
-| `--password P` | `password` | Single password for gentle-mode brute attempts. |
+| `--gentle` | off | Try a single credential pair only (default: full wordlists). |
+| `--user U` | `admin` | Single username for `--gentle` mode. |
+| `--password P` | `password` | Single password for `--gentle` mode. |
 | `--full-port` | off | Full TCP scan `-p-` (default: nmap top-1000 + table/web union). |
 | `--table FILE` | auto | JSON command library path (default: repo dir, then `/root/common_ports_test_commands.json`). |
 | `--dry-run` | off | Validate all library commands are executable without targeting a host. |
@@ -75,12 +75,12 @@ python3 scan_ip.py <IP> [options]
 
 ### Modes
 
-- **Gentle (default)** — brute-force commands try a single credential pair
+- **Brute (default)** — brute-force commands load the full
+  `--passwords/--userlist` (`password.txt` + `userlist.txt` by default).
+- **Gentle (`--gentle`)** — brute-force commands try a single credential pair
   (`--user/--password`). The library's wordlist placeholders are pointed at
   one-line temp files, so hydra/msf/thc-pptp-bruter all attempt exactly one
   combination.
-- **Brute (`--brute`)** — brute-force commands load the full
-  `--wordlist/--userlist`.
 - **Dry-run (`--dry-run`)** — verifies every library command's binary exists
   and every msf module loads (batched in a single msfconsole session),
   producing `dryrun_report.txt` without touching a target.
@@ -111,8 +111,8 @@ Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
 - The tool never writes to, modifies, or deletes anything on the target
   (except what the exploit module itself does when executed); observational
   tests are read-only.
-- Brute-force is single-credential by default; full wordlists require an
-  explicit `--brute` flag.
+- Brute-force loads the full wordlists (`password.txt` + `userlist.txt`)
+  by default; pass `--gentle` for a single credential pair.
 - GUI tools (`vncviewer`, `xfreerdp`) are skipped in headless environments.
 
 ## Verification

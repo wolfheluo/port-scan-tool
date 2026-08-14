@@ -15,15 +15,15 @@ scan_ip.py — 單一 IP Port 風險自動化掃描（JSON 指令庫驅動版）
   7. 產出 runs/<時間戳>_<IP>/ { scan.log, results.json, summary.txt, raw/*.txt }
 
 用法：
-  python3 scan_ip.py <IP> [--wordlist FILE] [--userlist FILE] [--jobs N]
+  python3 scan_ip.py <IP> [--passwords FILE] [--userlist FILE] [--jobs N]
                        [--timeout N] [--no-install] [--out DIR]
-                       [--brute] [--user U] [--password P] [--full-port]
+                       [--gentle] [--user U] [--password P] [--full-port]
                        [--table FILE] [--dry-run]
                        [--check-tools] [--install-tools]
 
 模式：
-  - 預設（溫和）：爆破類指令只嘗試單一帳密（--user/--password，預設 admin/password）
-  - --brute：爆破類指令載入完整字典（--wordlist/--userlist）
+  - 預設（爆破）：爆破類指令載入完整字典（--passwords/--userlist）
+  - --gentle：爆破類指令只嘗試單一帳密（--user/--password，預設 admin/password）
   - --dry-run：不連目標，逐一驗證 190 指令可執行性（binary + msf 模組載入）
 
 安全邊界：
@@ -1040,7 +1040,7 @@ def resolve_domain(ip):
 
 def make_gentle_lists(out_dir, user, password):
     """溫和模式：建立單行帳密檔，讓所有爆破指令只試一組。
-    回傳 (wordlist_path, userlist_path) — 對應 main 的 cfg["wordlist"]/cfg["userlist"]。
+    回傳 (password_path, userlist_path) — 對應 main 的 cfg["passwords"]/cfg["userlist"]。
     """
     u = out_dir / "gentle_userlist.txt"
     p = out_dir / "gentle_passwords.txt"
@@ -1074,7 +1074,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
     cmd = test["cmd"]
     if test.get("mod"):
         argv = msf_to_argv(test["mod"], ip, port, cfg["user"], cfg["password"],
-                           cfg["userlist"], cfg["wordlist"], gentle)
+                           cfg["userlist"], cfg["passwords"], gentle)
         shell_wrap = False
         src_display = test["src"]
     else:
@@ -1096,7 +1096,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
         repl = {"{IP}": shlex.quote(ip), "{PORT}": str(port), "{DOMAIN}": shlex.quote(domain),
                 "{USER}": shlex.quote(cfg["user"]), "{PASSWORD}": shlex.quote(cfg["password"]),
                 "{USERLIST}": shlex.quote(cfg["userlist"]),
-                "{PASSWORDS}": shlex.quote(cfg["wordlist"]),
+                "{PASSWORDS}": shlex.quote(cfg["passwords"]),
                 "{PATH}": shlex.quote(cfg.get("path", "/"))}
         for k, v in repl.items():
             rendered = rendered.replace(k, v)
@@ -1192,7 +1192,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
                 continue
             log_line(log_path, "[%s][%s] 模組載入失敗，重試 %s" % (port, name, m2))
             argv2 = msf_to_argv(m2, ip, port, cfg["user"], cfg["password"],
-                                cfg["userlist"], cfg["wordlist"], gentle)
+                                cfg["userlist"], cfg["passwords"], gentle)
             timed_out = False  # 每次嘗試各自記錄逾時旗標
             try:
                 p = subprocess.Popen(argv2, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1345,15 +1345,15 @@ def dry_run(table_path, out_dir, no_exploit=False):
 def main():
     ap = argparse.ArgumentParser(description="單一 IP Port 風險自動化掃描（JSON 指令庫驅動）")
     ap.add_argument("ip", nargs="?", help="目標 IP（--dry-run 時可省略）")
-    ap.add_argument("--wordlist", default=str(BASE / "wordlist.txt"), help="爆破字典檔（--brute 模式；預設內建迷你字典）")
-    ap.add_argument("--userlist", default=str(BASE / "userlist.txt"), help="帳號清單檔（--brute 模式；預設內建）")
+    ap.add_argument("--passwords", "--wordlist", default=str(BASE / "password.txt"), help="爆破密碼檔（預設內建 password.txt）")
+    ap.add_argument("--userlist", default=str(BASE / "userlist.txt"), help="爆破帳號清單檔（預設內建 userlist.txt）")
     ap.add_argument("--jobs", type=int, default=4, help="並行 worker 數（預設 4）")
     ap.add_argument("--timeout", type=int, default=0, help="整體覆蓋 timeout（秒）")
     ap.add_argument("--no-install", action="store_true", help="不自動 apt-get install 缺漏工具")
     ap.add_argument("--out", default=str(RUNS), help="輸出根目錄（預設 runs/）")
-    ap.add_argument("--brute", action="store_true", help="爆破類指令載入完整字典（預設僅單一帳密溫和嘗試）")
-    ap.add_argument("--user", default="admin", help="溫和模式單一帳號（預設 admin）")
-    ap.add_argument("--password", default="password", help="溫和模式單一密碼（預設 password）")
+    ap.add_argument("--gentle", action="store_true", help="爆破類指令只嘗試單一帳密（預設載入完整字典）")
+    ap.add_argument("--user", default="admin", help="--gentle 模式單一帳號（預設 admin）")
+    ap.add_argument("--password", default="password", help="--gentle 模式單一密碼（預設 password）")
     ap.add_argument("--full-port", action="store_true", help="TCP 全埠掃描 -p-（預設 nmap top-1000 + 表格埠）")
     ap.add_argument("--table", default=None, help="JSON 指令庫路徑（預設依序找 repo 目錄或 /root 下的 common_ports_test_commands.json）")
     ap.add_argument("--dry-run", action="store_true", help="不連目標，驗證指令庫可執行性")
@@ -1409,15 +1409,15 @@ def main():
         print("錯誤: 目標 %r 含非法字元（僅允許 IP 或主機名）" % ip)
         sys.exit(1)
     args.ip = ip
-    wordlist = os.path.abspath(args.wordlist)
+    passwords = os.path.abspath(args.passwords)
     userlist = os.path.abspath(args.userlist)
-    for f, label in ((wordlist, "字典檔"), (userlist, "帳號清單")):
+    for f, label in ((passwords, "密碼檔"), (userlist, "帳號清單")):
         if not os.path.isfile(f):
             print("錯誤: %s %s 不存在" % (label, f))
             sys.exit(1)
 
     data, groups = load_library(args.table)
-    gentle = not args.brute
+    gentle = args.gentle
 
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -1428,9 +1428,9 @@ def main():
     log_line(log_path, "=== Port 風險掃描開始 目標=%s 時間=%s ===" % (ip, datetime.now().isoformat(timespec="seconds")))
     log_line(log_path, "指令庫: %s（%d port 群組）" % (args.table, len(groups)))
     log_line(log_path, "模式: %s | exploit: %s | 帳號: %s | 密碼: %s" % (
-        "溫和（單一帳密 %s/%s）" % (args.user, args.password) if gentle else "爆破（完整字典）",
+        "爆破（完整字典）" if not gentle else "溫和（單一帳密 %s/%s）" % (args.user, args.password),
         "跳過（--no-exploit）" if args.no_exploit else "執行",
-        os.path.basename(userlist), os.path.basename(wordlist)))
+        os.path.basename(userlist), os.path.basename(passwords)))
 
     # 1. 前置檢查
     missing_bins = preflight(args.no_install, log_path)
@@ -1445,15 +1445,15 @@ def main():
 
     # 3. 組測試清單 + 確認
     cfg = {
-        "wordlist": wordlist, "userlist": userlist, "timeout": args.timeout,
+        "passwords": passwords, "userlist": userlist, "timeout": args.timeout,
         "gentle": gentle, "user": args.user, "password": args.password,
         "path": "/", "no_exploit": args.no_exploit,
     }
     if gentle:
         # 溫和模式：字典指向單行臨時檔（爆破指令只試一組帳密）
-        wl, ul = make_gentle_lists(out_dir, args.user, args.password)
-        cfg["wordlist"], cfg["userlist"] = wl, ul
-        log_line(log_path, "溫和模式: 字典指向單行臨時檔 %s / %s" % (wl, ul))
+        pl, ul = make_gentle_lists(out_dir, args.user, args.password)
+        cfg["passwords"], cfg["userlist"] = pl, ul
+        log_line(log_path, "溫和模式: 字典指向單行臨時檔 %s / %s" % (pl, ul))
     jobs = []
     for port in sorted(open_ports):
         is_web = "http" in services.get(port, "") or port in WEB_PORTS

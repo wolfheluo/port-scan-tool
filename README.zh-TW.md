@@ -36,15 +36,15 @@ python3 scan_ip.py <IP> [options]
 
 | 選項 | 預設值 | 說明 |
 |---|---|---|
-| `--wordlist FILE` | `wordlist.txt` | 爆破測試用的密碼清單（`--brute` 模式）。 |
+| `--passwords FILE` | `password.txt` | 爆破測試用的密碼清單（預設載入完整字典）。 |
 | `--userlist FILE` | `userlist.txt` | 爆破/列舉測試用的帳號清單。 |
 | `--jobs N` | `4` | 並行測試 worker 數。 |
 | `--timeout N` | 分級 | 覆寫單一測試逾時（秒）。 |
 | `--no-install` | off | 不自動以 apt 安裝缺失工具。 |
 | `--out DIR` | `runs/` | 輸出根目錄。 |
-| `--brute` | off | 載入完整字典爆破（預設為單一帳密）。 |
-| `--user U` | `admin` | 溫和模式單一帳號。 |
-| `--password P` | `password` | 溫和模式單一密碼。 |
+| `--gentle` | off | 爆破只嘗試單一帳密（預設載入完整字典）。 |
+| `--user U` | `admin` | `--gentle` 模式單一帳號。 |
+| `--password P` | `password` | `--gentle` 模式單一密碼。 |
 | `--full-port` | off | TCP 全埠掃描 `-p-`（預設 nmap top-1000 + 表格/web 埠）。 |
 | `--table FILE` | 自動 | JSON 指令庫路徑（預設依序找 repo 目錄、`/root/common_ports_test_commands.json`）。 |
 | `--dry-run` | off | 不連目標，驗證指令庫可執行性。 |
@@ -54,8 +54,8 @@ python3 scan_ip.py <IP> [options]
 
 ### 模式
 
-- **溫和（預設）** — 爆破類指令只嘗試單一帳密（`--user/--password`）。指令庫的字典佔位符指向單行臨時檔，hydra/msf/thc-pptp-bruter 都只試一組組合。
-- **爆破（`--brute`）** — 爆破類指令載入完整 `--wordlist/--userlist`。
+- **爆破（預設）** — 爆破類指令載入完整 `--passwords/--userlist`（預設 `password.txt` + `userlist.txt`）。
+- **溫和（`--gentle`）** — 爆破類指令只嘗試單一帳密（`--user/--password`）。指令庫的字典佔位符指向單行臨時檔，hydra/msf/thc-pptp-bruter 都只試一組組合。
 - **乾跑（`--dry-run`）** — 驗證每條指令庫指令的 binary 存在、每個 msf 模組可載入（單次 msfconsole 批次），產出 `dryrun_report.txt`，不碰目標。
 
 ## 涵蓋服務
@@ -66,7 +66,7 @@ FTP (21)、SSH (22)、Telnet (23)、SMTP (25)、DNS (53)、TFTP (69)、HTTP (80)
 
 - **exploit 模組預設會執行**（`java_rmi_server`、`cve_2021_38647_omigod` 等）。加 `--no-exploit` 可改為一律 `SKIP`。
 - 觀測型測試絕不寫入、修改或刪除目標上的任何東西（執行 exploit 模組時的影響屬模組本身行為）。
-- 爆破預設為單一帳密；完整字典需明確加 `--brute`。
+- 爆破預設載入完整字典（`password.txt` + `userlist.txt`）；只要單一帳密請加 `--gentle`。
 - GUI 工具（`vncviewer`、`xfreerdp`）在 headless 環境自動 SKIP。
 
 ## 驗證
