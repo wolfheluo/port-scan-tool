@@ -63,7 +63,7 @@ python3 scan_ip.py <IP> [options]
 | `--timeout N` | graded | Override per-test timeout (seconds). |
 | `--no-install` | off | Do not auto-install missing tools via apt. |
 | `--out DIR` | `runs/` | Output root directory. |
-| `--gentle` | off | Try a single credential pair only (default: full wordlists). |
+| `--gentle` | off | Try a single credential pair only (default: full password lists). |
 | `--user U` | `admin` | Single username for `--gentle` mode. |
 | `--password P` | `password` | Single password for `--gentle` mode. |
 | `--full-port` | off | Full TCP scan `-p-` (default: nmap top-1000 + table/web union). |
@@ -78,7 +78,7 @@ python3 scan_ip.py <IP> [options]
 - **Brute (default)** — brute-force commands load the full
   `--passwords/--userlist` (`password.txt` + `userlist.txt` by default).
 - **Gentle (`--gentle`)** — brute-force commands try a single credential pair
-  (`--user/--password`). The library's wordlist placeholders are pointed at
+  (`--user/--password`). The library's password-list placeholders are pointed at
   one-line temp files, so hydra/msf/thc-pptp-bruter all attempt exactly one
   combination.
 - **Dry-run (`--dry-run`)** — verifies every library command's binary exists
@@ -111,7 +111,7 @@ Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
 - The tool never writes to, modifies, or deletes anything on the target
   (except what the exploit module itself does when executed); observational
   tests are read-only.
-- Brute-force loads the full wordlists (`password.txt` + `userlist.txt`)
+- Brute-force loads the full password lists (`password.txt` + `userlist.txt`)
   by default; pass `--gentle` for a single credential pair.
 - GUI tools (`vncviewer`, `xfreerdp`) are skipped in headless environments.
 

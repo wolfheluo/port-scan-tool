@@ -1345,7 +1345,7 @@ def dry_run(table_path, out_dir, no_exploit=False):
 def main():
     ap = argparse.ArgumentParser(description="單一 IP Port 風險自動化掃描（JSON 指令庫驅動）")
     ap.add_argument("ip", nargs="?", help="目標 IP（--dry-run 時可省略）")
-    ap.add_argument("--passwords", "--wordlist", default=str(BASE / "password.txt"), help="爆破密碼檔（預設內建 password.txt）")
+    ap.add_argument("--passwords", default=str(BASE / "password.txt"), help="爆破密碼檔（預設內建 password.txt）")
     ap.add_argument("--userlist", default=str(BASE / "userlist.txt"), help="爆破帳號清單檔（預設內建 userlist.txt）")
     ap.add_argument("--jobs", type=int, default=4, help="並行 worker 數（預設 4）")
     ap.add_argument("--timeout", type=int, default=0, help="整體覆蓋 timeout（秒）")
