@@ -185,6 +185,14 @@ EXPLOIT_MARKERS = ("exploit/", "omigod", "cve_2021_38647", "java_rmi_server")
 
 log_lock = threading.Lock()
 
+# ANSI 顏色碼（sslscan 等工具即使 TERM=dumb 仍輸出）→ 剝離，避免污染 raw/PNG
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def _strip_ansi(text):
+    """移除 ANSI escape 序列（CSI 顏色/樣式 + OSC）。"""
+    return ANSI_ESCAPE_RE.sub("", text) if text else text
+
 
 def log_line(log_path, text):
     """執行緒安全的流水帳寫入（scan.log + stdout）。"""
@@ -1213,6 +1221,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
     try:
         if use_fallback:
             out, rc = FALLBACK_BIN[bin0](ip, port, cfg)
+            out = _strip_ansi(out)
         else:
             p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  text=True, errors="replace", start_new_session=True,
@@ -1233,6 +1242,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
                 "summary": "執行錯誤: %s" % e, "raw": "", "duration": time.time() - t0, "cmd": cmd_display}
 
     dur = time.time() - t0
+    out, err = _strip_ansi(out), _strip_ansi(err)
     combined = out + "\n" + err
 
     # msf 模組載入失敗 → 自動重試修正（僅限載入錯誤，網路失敗不觸發）
@@ -1262,6 +1272,7 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
             except FileNotFoundError:
                 log_line(log_path, "[%s][%s] 模組重試失敗：工具不存在" % (port, name))
                 break
+            out, err = _strip_ansi(out), _strip_ansi(err)
             combined = out + "\n" + err
             if not re.search(r"failed to load module|is not a valid module|unknown module", combined, re.I):
                 log_line(log_path, "[%s][%s] 重試成功 → 模組 %s" % (port, name, m2))
