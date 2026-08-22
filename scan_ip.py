@@ -8,7 +8,7 @@ scan_ip.py — 單一 IP Port 風險自動化掃描（JSON 指令庫驅動版）
 流程：
   1. 前置檢查（工具缺失 → 自動 apt-get install，失敗則跳過該測試）
   2. 載入 JSON 指令庫 → 轉換層（msf6> 解析、變數填充、已知修正、自動重試）
-  3. 目標確認（顯示目標與測試數量，Enter 才繼續；非互動環境自動通過）
+  3. 目標確認（顯示目標與測試數量，自動開始執行）
   4. nmap 偵測開啟 port（TCP top-1000∪表格埠∪web埠；UDP 表格內定點掃）
   5. 依 JSON 指令庫派發測試（--jobs 並行）
   6. 每測試判讀 PASS / WARN / RISK / FAIL / SKIP（每 port 關鍵字表）
@@ -1537,16 +1537,7 @@ def main():
     print("將執行測試數   : %d" % len(jobs))
     print("模式           : %s" % ("溫和（單一帳密）" if gentle else "爆破（完整字典）"))
     print("輸出目錄       : %s" % out_dir)
-    if sys.stdin.isatty():
-        try:
-            input("按 Enter 開始（Ctrl-C 取消）...")
-        except EOFError:
-            print("（stdin EOF，自動繼續）")
-        except KeyboardInterrupt:
-            print("已取消")
-            sys.exit(1)
-    else:
-        print("（非互動環境，自動繼續）")
+    print("（資訊確認完畢，自動開始執行；Ctrl-C 可中斷）")
 
     # 4. 執行
     results = []
