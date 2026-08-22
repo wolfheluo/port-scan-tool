@@ -873,6 +873,42 @@ def _parse_nmap_xml(xml_text, include_open_filtered=False):
     return open_ports, services
 
 
+_TOP1000_CACHE = None
+
+
+def _nmap_top_ports():
+    """nmap 內建 top-1000 埠集合（由 nmap-services 頻率推導，與 nmap 內部一致）。
+    啟動時算一次並快取；讀取失敗回傳 None（呼叫端退回掃全部表格埠）。"""
+    global _TOP1000_CACHE
+    if _TOP1000_CACHE is not None:
+        return _TOP1000_CACHE
+    svc = []
+    try:
+        with open("/usr/share/nmap/nmap-services", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                m = re.match(r"^(\d+)/(tcp|udp)$", parts[1])
+                if not m or m.group(2) != "tcp":
+                    continue
+                try:
+                    freq = float(parts[2])
+                except ValueError:
+                    continue
+                svc.append((int(m.group(1)), freq))
+    except OSError:
+        return None
+    if not svc:
+        return None
+    svc.sort(key=lambda x: -x[1])
+    _TOP1000_CACHE = {p for p, _ in svc[:1000]}
+    return _TOP1000_CACHE
+
+
 def scan_ports(ip, log_path, full_port, groups):
     """TCP + UDP 掃描。回傳 ({port: proto}, {port: service})。"""
     # 表格 + web 埠（nmap top-1000 之外的補掃清單）
@@ -900,12 +936,19 @@ def scan_ports(ip, log_path, full_port, groups):
 
     # TCP：nmap 內建 top-1000（nmap 自身維護，不需自備清單）
     # -p 會覆蓋 --top-ports，故表格/web 埠另以短清單補掃
+    # 補掃只掃 top-1000 之外的埠（實測 72 表格埠中 54 個已在 top-1000）
     if full_port:
         scans = [("-p-", "全埠 -p-")]
     else:
-        scans = [("--top-ports 1000", "nmap top-1000"),
-                 ("-p " + ",".join(str(p) for p in sorted(table_ports)),
-                  "表格+web 埠(%d)" % len(table_ports))]
+        top1000 = _nmap_top_ports()
+        if top1000 is not None:
+            supplement = sorted(p for p in table_ports if p not in top1000)
+        else:
+            supplement = sorted(table_ports)  # 推導失敗 → 退回掃全部表格埠
+        scans = [("--top-ports 1000", "nmap top-1000")]
+        if supplement:
+            scans.append(("-p " + ",".join(str(p) for p in supplement),
+                          "表格補掃(%d 埠, top-1000 外)" % len(supplement)))
     try:
         for plist_cmd, desc in scans:
             log_line(log_path, "掃描: nmap -Pn -sT -T4 --unprivileged %s %s（TCP %s）" % (
@@ -1539,16 +1582,23 @@ def export_png(out_dir, log_path):
         return
     png_root = out_dir / "PNG"
     png_root.mkdir(parents=True, exist_ok=True)
-    ok_count = 0
-    for i, txt in enumerate(txt_files, 1):
+
+    def _convert(txt):
         rel = txt.relative_to(out_dir)
         try:
             _png_render_txt(txt, png_root / rel.with_suffix(".png"), font)
-            ok_count += 1
+            return True
         except Exception as e:
             log_line(log_path, "PNG 匯出失敗 %s: %s" % (rel, e))
-        print("[PNG] (%d/%d) %s" % (i, len(txt_files), rel), flush=True)
-    log_line(log_path, "PNG 匯出完成: %d/%d 張 → %s" % (ok_count, len(txt_files), png_root))
+            return False
+
+    workers = min(8, len(txt_files))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        ok_flags = list(ex.map(_convert, txt_files))
+    ok_count = sum(ok_flags)
+    for i, txt in enumerate(txt_files, 1):
+        print("[PNG] (%d/%d) %s" % (i, len(txt_files), txt.relative_to(out_dir)), flush=True)
+    log_line(log_path, "PNG 匯出完成: %d/%d 張（並行 %d）→ %s" % (ok_count, len(txt_files), workers, png_root))
 
 
 # ---------------------------------------------------------------------------

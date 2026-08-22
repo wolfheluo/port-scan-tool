@@ -29,10 +29,12 @@ trail for subsequent offline analysis.
    then the target is displayed with the planned test count and execution
    starts automatically.
 4. **Scanning** — `nmap -Pn -sT -T4` enumerates TCP ports
-   (top-1000 ∪ table ports ∪ web ports; `--full-port` switches to `-p-`).
-   UDP ports referenced by the library (`-sU` commands) are probed
-   point-targeted. Ports outside the table are fingerprinted with
-   `nmap -sV --version-light` and recorded as "open with no matching test".
+   (nmap top-1000 + a supplementary scan of table/web ports *outside* the
+   top-1000 — derived from `nmap-services` frequency, cached per run;
+   `--full-port` switches to `-p-`). UDP ports referenced by the library
+   (`-sU` commands) are probed point-targeted. Ports outside the table are
+   fingerprinted with `nmap -sV --version-light` and recorded as "open with
+   no matching test".
 5. **Execution** — tests are dispatched per open port with configurable
    parallelism (`--jobs 4` by default). Every log line carries an
    `[HH:MM:SS][port][test]` prefix for post-hoc correlation.
@@ -129,12 +131,12 @@ Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
 
 ## Verification
 
-- **Dry-run** — all 190 library commands verified: 18/18 msf modules load
+- **Dry-run** — all 188 library commands verified: 18/18 msf modules load
   successfully; binaries present in the environment pass, missing ones
   (e.g. crackmapexec, mongosh, testssl.sh) are SKIP-listed and installable
   via `--install-tools`.
-- **End-to-end** — verified against local simulated services (SMTP, POP3,
-  Redis, HTTP with TRACE enabled, and an unclassified banner port) on
+- **End-to-end** — verified against `test_server.py` (local simulated SMTP,
+  POP3, Redis, HTTP with TRACE enabled, and an unclassified banner port) on
   `127.0.0.1`, plus multiple real-world runs against mail-cretech.com.tw
   converging to 46 tests with `FAIL 0` (incl. MySQL 8 TLS-aware weak-credential
   tests and TLSv1.1 detection).
