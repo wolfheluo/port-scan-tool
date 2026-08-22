@@ -45,6 +45,13 @@ trail for subsequent offline analysis.
    - `results.json` — structured machine-readable results.
    - `summary.txt` — human-readable summary (RISK/WARN/FAIL/SKIP lists).
    - `raw/<port>_<test>.txt` — full raw output of each test (evidence).
+7. **PNG export (automatic)** — every `.txt` artifact (summary, scan.log,
+   and all raw outputs, structure preserved) is rendered to
+   `PNG/` as dark-theme images (black background, Kali-green command
+   lines). Requires Pillow (auto-installed via pip on first use) and a
+   CJK-capable font for Chinese text (`fonts-noto-cjk`, installed by
+   `--install-tools`); export failures are logged and never affect scan
+   results or exit code.
 
 ## Usage
 
@@ -136,7 +143,10 @@ Hadoop NameNode (50070), ActiveMQ OpenWire (61616), HTTP TRACE/TRACK.
 
 ## Dependencies
 
-Python 3 standard library only (no pip packages). External tools detected at
+Python 3 standard library + Pillow (auto-installed via pip on first PNG
+export; `--break-system-packages` used on PEP 668 systems) and
+`fonts-noto-cjk` (installed by `--install-tools` for Chinese PNG
+rendering). External tools detected at
 runtime and installed on demand: nmap, nc, hydra, sslscan, smbclient, smbmap,
 rpcclient, mysql, dnsrecon, msfconsole, impacket-rpcdump, curl, masscan,
 redis-tools, nbtscan, smtp-user-enum, thc-pptp-bruter, nfs-common, snmp,

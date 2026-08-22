@@ -44,6 +44,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import threading
 import time
 import urllib.request
@@ -738,6 +739,12 @@ def install_tools_main(check_only=False):
     for b in special:
         globals()[SPECIAL_INSTALLERS[b]]()
 
+    # 中文字體（PNG 匯出中文渲染用；fonts-noto-cjk 非 binary，單獨處理）
+    cjk_font_paths = PNG_FONT_CANDIDATES[:8]
+    if not any(Path(p).exists() for p in cjk_font_paths):
+        print("[install] 安裝中文字體 fonts-noto-cjk（PNG 匯出中文渲染）...", flush=True)
+        _run_install_cmd(_sudo_cmd(["apt-get", "install", "-y", "fonts-noto-cjk"]), timeout=600)
+
     print("\n=== 安裝結果 ===")
     ok = True
     for b in sorted(missing):
@@ -1404,6 +1411,134 @@ def dry_run(table_path, out_dir, no_exploit=False):
 
 
 # ---------------------------------------------------------------------------
+# PNG 匯出（掃描結果自動轉圖片；暗色 Cyberpunk 風格，中文優先字體）
+# ---------------------------------------------------------------------------
+PNG_FONT_CANDIDATES = [
+    # CJK 優先（報告含中文）
+    "/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "C:/Windows/Fonts/msyh.ttc",     # 微軟正黑
+    "C:/Windows/Fonts/msjh.ttc",     # 微軟正黑體
+    "C:/Windows/Fonts/simhei.ttf",   # 黑體
+    "/System/Library/Fonts/PingFang.ttc",
+    # 等寬 fallback（無中文字形時，中文會變方塊）
+    "C:/Windows/Fonts/consola.ttf",
+    "C:/Windows/Fonts/cour.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+    "/System/Library/Fonts/Menlo.ttc",
+]
+PNG_MAX_COLS = 120
+PNG_FONT_SIZE = 20
+PNG_PADDING_X, PNG_PADDING_Y = 35, 30
+PNG_LINE_GAP = 7
+PNG_BG = (10, 10, 12)        # 黑底
+PNG_TEXT = (225, 225, 225)   # 一般文字
+PNG_CMD = (126, 211, 33)     # Kali 綠（$ 開頭指令行）
+
+
+def _png_get_font():
+    """依候選清單取字體（CJK 優先）；全缺回傳 None。"""
+    from PIL import ImageFont
+    for font_path in PNG_FONT_CANDIDATES:
+        if Path(font_path).exists():
+            try:
+                return ImageFont.truetype(font_path, PNG_FONT_SIZE)
+            except Exception:
+                continue
+    return None
+
+
+def _png_wrap_line(line):
+    line = line.expandtabs(4).rstrip("\r\n")
+    if not line:
+        return [""]
+    return textwrap.wrap(line, width=PNG_MAX_COLS, replace_whitespace=False,
+                         drop_whitespace=False, break_long_words=True,
+                         break_on_hyphens=False) or [""]
+
+
+def _png_read_txt(path):
+    for encoding in ("utf-8", "utf-8-sig", "big5", "cp950"):
+        try:
+            return Path(path).read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            pass
+    return Path(path).read_text(encoding="utf-8", errors="replace")
+
+
+def _png_render_txt(txt_path, png_path, font):
+    from PIL import Image, ImageDraw
+    text = _png_read_txt(txt_path)
+    lines = []
+    for raw_line in text.splitlines():
+        lines.extend(_png_wrap_line(raw_line))
+    if not lines:
+        lines = [""]
+    bbox = font.getbbox("Ag")
+    line_height = bbox[3] - bbox[1] + PNG_LINE_GAP
+    max_width = max(font.getlength(line) for line in lines)
+    image_width = int(max(900, PNG_PADDING_X * 2 + max_width + 20))
+    image_height = int(max(300, PNG_PADDING_Y * 2 + len(lines) * line_height + 20))
+    image = Image.new("RGB", (image_width, image_height), PNG_BG)
+    draw = ImageDraw.Draw(image)
+    y = PNG_PADDING_Y
+    for line in lines:
+        color = PNG_CMD if line.lstrip().startswith("$ ") else PNG_TEXT
+        draw.text((PNG_PADDING_X, y), line, font=font, fill=color)
+        y += line_height
+    png_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(png_path, "PNG", optimize=True)
+
+
+def export_png(out_dir, log_path):
+    """掃描結果目錄內所有 .txt → PNG/（保留相對結構）。
+    缺 Pillow 時自動 pip 安裝；失敗只 log，不影響掃描結果。
+    """
+    try:
+        import PIL  # noqa: F401  觸發自動安裝判定
+    except ImportError:
+        log_line(log_path, "PNG 匯出: Pillow 未安裝，嘗試自動安裝...")
+        try:
+            r = subprocess.run(_sudo_cmd([sys.executable, "-m", "pip", "install", "--quiet",
+                                          "--break-system-packages", "pillow"]),
+                               capture_output=True, text=True, timeout=180)
+            if r.returncode == 0:
+                import PIL  # noqa: F401
+            else:
+                log_line(log_path, "PNG 匯出: pip 安裝 pillow 失敗（%s）→ 跳過" % (r.stderr or r.stdout).strip()[-150:])
+                return
+        except Exception as e:
+            log_line(log_path, "PNG 匯出: pip 安裝 pillow 失敗: %s → 跳過" % e)
+            return
+    font = _png_get_font()
+    if font is None:
+        log_line(log_path, "PNG 匯出: 找不到可用字體（建議 apt install fonts-noto-cjk）→ 跳過")
+        return
+    out_dir = Path(out_dir)
+    txt_files = sorted(p for p in out_dir.rglob("*.txt")
+                       if p.name not in ("gentle_userlist.txt", "gentle_passwords.txt")
+                       and "PNG" not in p.parts)
+    if not txt_files:
+        log_line(log_path, "PNG 匯出: 無 .txt 可轉")
+        return
+    png_root = out_dir / "PNG"
+    png_root.mkdir(parents=True, exist_ok=True)
+    ok_count = 0
+    for i, txt in enumerate(txt_files, 1):
+        rel = txt.relative_to(out_dir)
+        try:
+            _png_render_txt(txt, png_root / rel.with_suffix(".png"), font)
+            ok_count += 1
+        except Exception as e:
+            log_line(log_path, "PNG 匯出失敗 %s: %s" % (rel, e))
+        print("[PNG] (%d/%d) %s" % (i, len(txt_files), rel), flush=True)
+    log_line(log_path, "PNG 匯出完成: %d/%d 張 → %s" % (ok_count, len(txt_files), png_root))
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 def main():
@@ -1606,6 +1741,7 @@ def main():
         f.write("\n".join(lines) + "\n")
 
     print("\n" + "\n".join(lines))
+    export_png(out_dir, log_path)
     log_line(log_path, "=== 完成: %d 測試, RISK=%d WARN=%d PASS=%d FAIL=%d SKIP=%d ===" % (
         stats["total"], stats["RISK"], stats["WARN"], stats["PASS"], stats["FAIL"], stats["SKIP"]))
 
