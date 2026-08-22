@@ -457,7 +457,7 @@ def trace_test(port):
     scheme = "https" if port in (443, 8443) else "http"
     return {
         "name": "http-trace", "kind": "detect", "argv": None,
-        "cmd": "curl -s -i --max-time 10 -X TRACE %s://%s:%d/" % (scheme, "{IP}", port),
+        "cmd": "curl -s -i -k --max-time 10 -X TRACE %s://%s:%d/" % (scheme, "{IP}", port),
         "risk": [r"HTTP/1\.[01] 200"],
         "warn": [r"HTTP/1\.[01] 405", r"HTTP/1\.[01] 501", r"not allowed", r"not implemented"],
         "src": "表格: HTTP TRACE — telnet {IP} {PORT} + TRACE / HTTP/1.1（以 curl -X TRACE 取代）",
@@ -922,24 +922,31 @@ def python_connect_scan(ip, log_path, plist, timeout=1.5, workers=200):
     return open_ports
 
 
-def nmap_sv_unknown(ip, ports, services, log_path):
-    """對表外 port 抓 service 名稱（banner）。"""
+def nmap_sv_unknown(ip, ports, open_ports, services, log_path):
+    """對表外 port 抓 service 名稱（banner）；依 proto 分 TCP/UDP 掃描。"""
     if not ports:
         return
-    plist = ",".join(str(p) for p in sorted(ports))
-    log_line(log_path, "表外 port 抓 banner: nmap -Pn -sV --version-light -p %s %s" % (plist, ip))
-    try:
-        r = subprocess.run(["nmap", "-Pn", "-sT", "-sV", "--version-light", "--unprivileged",
-                            "-p", plist, "-oX", "-", ip],
-                           capture_output=True, text=True, timeout=120)
-        root = ElementTree.fromstring(r.stdout)
-        for host in root.iter("host"):
-            for port in host.iter("port"):
-                svc = port.find("service")
-                if svc is not None and svc.get("name"):
-                    services[int(port.get("portid"))] = svc.get("name")
-    except Exception as e:
-        log_line(log_path, "表外 port banner 抓取失敗: %s" % e)
+    tcp_ports = [p for p in ports if open_ports.get(p) != "udp"]
+    udp_ports = [p for p in ports if open_ports.get(p) == "udp"]
+    for plist, scan_type in ((tcp_ports, "-sT"), (udp_ports, "-sU")):
+        if not plist:
+            continue
+        pstr = ",".join(str(p) for p in sorted(plist))
+        log_line(log_path, "表外 port 抓 banner: nmap -Pn %s -sV --version-light -p %s %s" % (scan_type, pstr, ip))
+        try:
+            argv = ["nmap", "-Pn", scan_type, "-sV", "--version-light"]
+            if scan_type == "-sT":
+                argv.append("--unprivileged")
+            r = subprocess.run(argv + ["-p", pstr, "-oX", "-", ip],
+                               capture_output=True, text=True, timeout=120)
+            root = ElementTree.fromstring(r.stdout)
+            for host in root.iter("host"):
+                for port in host.iter("port"):
+                    svc = port.find("service")
+                    if svc is not None and svc.get("name"):
+                        services[int(port.get("portid"))] = svc.get("name")
+        except Exception as e:
+            log_line(log_path, "表外 port banner 抓取失敗（%s）: %s" % (scan_type, e))
 
 
 # ---------------------------------------------------------------------------
@@ -1233,7 +1240,8 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
         f.write("$ %s\n[rc=%d, %.1fs%s]\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n"
                 % (cmd_display, rc, dur, ", 逾時" if timed_out else "", out, err))
 
-    # 判讀（有輸出時先跑關鍵字匹配，逾時僅作降級等級，避免吞掉真實發現）
+    # 判讀（有輸出時安全訊號優先：RISK → WARN → 執行異常 → PASS；
+    #  not-found/模組失敗檢查放關鍵字之後，避免遮蓋真實發現）
     if not combined.strip():
         if timed_out:
             status, summary = "WARN", "逾時無輸出(%ds)" % timeout
@@ -1241,9 +1249,6 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
             status, summary = "WARN", "執行失敗(rc=%d) 無輸出（連線逾時/拒絕等網路級負面）" % rc
         else:
             status, summary = "PASS", "無異常輸出"
-    elif re.search(r"not found|invalid script|failed to compile|no such script|command not found|"
-                   r"failed to load module|is not a valid module|unknown module", combined, re.I):
-        status, summary = "FAIL", "指令/script 不可用（輸出含 not found / 模組載入失敗等）"
     else:
         risk_hit = next((ln.strip() for ln in combined.splitlines()
                          if any(re.search(pat, ln, re.I) for pat in test["risk"])), None) if test["risk"] else None
@@ -1254,6 +1259,9 @@ def run_one(ip, port, test, cfg, missing_bins, out_dir, log_path):
                              if any(re.search(pat, ln, re.I) for pat in test["warn"])), None) if test["warn"] else None
             if warn_hit:
                 status, summary = "WARN", warn_hit[:140]
+            elif re.search(r"not found|invalid script|failed to compile|no such script|command not found|"
+                           r"failed to load module|is not a valid module|unknown module", combined, re.I):
+                status, summary = "FAIL", "指令/script 不可用（輸出含 not found / 模組載入失敗等）"
             elif timed_out or rc == 124:
                 status, summary = "WARN", "逾時(%ds)，輸出已截斷" % timeout
             elif rc != 0:
@@ -1309,6 +1317,23 @@ def dry_run(table_path, out_dir, no_exploit=False):
             fail += 1
             bad_bins.append(b)
             lines.append("[FAIL] binary 缺失: %s" % b)
+
+    # trace_test（動態 HTTP TRACE 測試）可執行性：curl 存在 + argv 可組
+    for tport in (80, 443):
+        total += 1
+        t = trace_test(tport)
+        rendered = t["cmd"].replace("{IP}", "127.0.0.1")
+        try:
+            argv = shlex.split(rendered)
+        except ValueError:
+            argv = []
+        if argv and argv[0] == "curl" and shutil.which("curl"):
+            ok_bin += 1
+            lines.append("[OK]   trace_test(%s): %s" % (tport, rendered))
+        else:
+            fail += 1
+            bad_bins.append("trace_test(%s)" % tport)
+            lines.append("[FAIL] trace_test(%s) 無法執行: %s" % (tport, rendered))
 
     # msf 模組批量載入檢查（單次 msfconsole 啟動，逐模組 use）
     if mods:
@@ -1455,7 +1480,7 @@ def main():
     for key in groups:
         known_keys |= {int(p) for p in key.split(",") if p.strip().isdigit()}
     unknown = [p for p in open_ports if p not in known_keys]
-    nmap_sv_unknown(ip, unknown, services, log_path)
+    nmap_sv_unknown(ip, unknown, open_ports, services, log_path)
 
     # 3. 組測試清單 + 確認
     cfg = {

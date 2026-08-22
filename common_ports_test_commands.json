@@ -193,11 +193,9 @@
       "port": "443",
       "name": "HTTPS",
       "commands": [
-        "sslscan {IP}or{IP}:{PORT}",
-        "nmap -p 443,8443 -Pn --script ssl-cert  {IP} ->SSL憑證資訊",
-        "nmap -sV --script ssl-enum-ciphers -p 443 {IP}",
-        "sslscan {IP} 或 sslscan {IP}:{PORT}",
+        "sslscan {IP}:{PORT}",
         "nmap -p 443,8443 -Pn --script ssl-cert {IP}",
+        "nmap -sV --script ssl-enum-ciphers -p 443 {IP}",
         "openssl s_client -connect {IP}:443 -servername {DOMAIN}",
         "testssl.sh {IP}:443"
       ],
