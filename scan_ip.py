@@ -755,38 +755,51 @@ def install_tools_main(check_only=False):
 def preflight(no_install, log_path):
     missing = [b for b in TOOL_PACKAGES if not _is_tool_installed(b)]
     missing += [b for b in NO_APT_TOOLS if not _is_tool_installed(b)]
-    # 無 apt 套件的工具：缺則 SKIP（不嘗試安裝）
-    no_apt_missing = sorted(set(missing) & NO_APT_TOOLS)
-    for b in no_apt_missing:
-        log_line(log_path, "工具 %s 缺失（無 apt 套件）→ 相關測試 SKIP" % b)
-    install_missing = sorted(set(missing) - NO_APT_TOOLS)
+    missing = sorted(set(missing))
     if not missing:
         log_line(log_path, "工具檢查: 全部齊全")
         return set()
     if no_install:
         log_line(log_path, "工具檢查: 缺少 %s（--no-install 已指定，相關測試將跳過）" % ", ".join(missing))
         return set(missing)
-    pkgs = set()
-    for b in install_missing:
+    # 三分類: apt 可裝 / 特殊安裝器 / 無安裝途徑（→ SKIP）
+    apt_missing, special_missing, no_path_missing = [], [], []
+    for b in missing:
         cands = TOOL_PACKAGES.get(b) or KALI_APT.get(b) or []
         if isinstance(cands, str):
             cands = [cands]
-        for c in cands:
-            if c:
-                pkgs.add(c)
-    log_line(log_path, "工具檢查: 缺少 %s，開始自動安裝（套件: %s）" % (
-        ", ".join(install_missing), ", ".join(sorted(pkgs)) or "無對應套件"))
-    if pkgs and os.geteuid() != 0:
-        log_line(log_path, "非 root，無法自動安裝；相關測試將跳過")
-        return set(install_missing)
-    if pkgs and os.geteuid() == 0:
+        if cands:
+            apt_missing.append(b)
+        elif b in SPECIAL_INSTALLERS:
+            special_missing.append(b)
+        else:
+            no_path_missing.append(b)
+    for b in no_path_missing:
+        log_line(log_path, "工具 %s 缺失（無安裝途徑）→ 相關測試 SKIP" % b)
+    if not (apt_missing or special_missing):
+        log_line(log_path, "工具檢查: 缺少 %s（無可自動安裝之套件）→ 相關測試將跳過" % ", ".join(no_path_missing))
+        return set(no_path_missing)
+    # root/sudo 門檻: apt 與特殊安裝器都需要（特殊安裝器內部用 _sudo_cmd）
+    if os.geteuid() != 0 and not shutil.which("sudo"):
+        log_line(log_path, "非 root 且無 sudo，無法自動安裝；相關測試將跳過")
+        return set(missing)
+    # apt 安裝（依序嘗試候選套件，第一個成功即停）
+    if apt_missing:
+        pkgs = set()
+        for b in apt_missing:
+            cands = TOOL_PACKAGES.get(b) or KALI_APT.get(b) or []
+            if isinstance(cands, str):
+                cands = [cands]
+            pkgs.update(c for c in cands if c)
+        log_line(log_path, "工具檢查: 缺少 %s，開始自動安裝（套件: %s）" % (
+            ", ".join(apt_missing), ", ".join(sorted(pkgs)) or "無對應套件"))
         try:
-            r = subprocess.run(["apt-get", "update", "-qq"], capture_output=True,
+            r = subprocess.run(_sudo_cmd(["apt-get", "update", "-qq"]), capture_output=True,
                                text=True, timeout=180)
             log_line(log_path, "apt-get update 結束 code=%d" % r.returncode)
         except subprocess.TimeoutExpired:
             log_line(log_path, "apt-get update 逾時，續行安裝（可能失敗）")
-        for b in install_missing:
+        for b in apt_missing:
             cands = TOOL_PACKAGES.get(b) or KALI_APT.get(b) or []
             if isinstance(cands, str):
                 cands = [cands]
@@ -794,7 +807,7 @@ def preflight(no_install, log_path):
                 if not pkg:
                     continue
                 try:
-                    r = subprocess.run(["apt-get", "install", "-y", pkg],
+                    r = subprocess.run(_sudo_cmd(["apt-get", "install", "-y", pkg]),
                                        capture_output=True, text=True, timeout=300)
                     if r.returncode == 0:
                         log_line(log_path, "已安裝套件: %s（%s）" % (pkg, b))
@@ -803,7 +816,19 @@ def preflight(no_install, log_path):
                         pkg, r.returncode, (r.stderr or r.stdout).strip()[-200:]))
                 except subprocess.TimeoutExpired:
                     log_line(log_path, "安裝 %s 逾時" % pkg)
-    still_missing = {b for b in missing if shutil.which(b) is None}
+    # 特殊來源安裝器（mongosh / odat / odat.py / testssl.sh；同一安裝器去重）
+    seen_installers = set()
+    for b in special_missing:
+        fn = SPECIAL_INSTALLERS[b]
+        if fn in seen_installers:
+            continue
+        seen_installers.add(fn)
+        log_line(log_path, "工具 %s 缺失，以特殊來源安裝..." % b)
+        try:
+            globals()[fn]()
+        except Exception as e:
+            log_line(log_path, "特殊安裝 %s 失敗: %s" % (b, e))
+    still_missing = {b for b in missing if not _is_tool_installed(b)}
     for b in sorted(still_missing):
         log_line(log_path, "工具 %s 仍缺失 → 相關測試跳過 (WARN)" % b)
     return still_missing
