@@ -6,13 +6,13 @@ scan_ip.py — 單一 IP Port 風險自動化掃描（JSON 指令庫驅動版）
 依「常見port_測試指令.json」（72 port × 190 指令）自動化執行。
 
 流程：
-  1. 前置檢查（工具缺失 → 自動 apt-get install，失敗則跳過該測試）
-  2. 載入 JSON 指令庫 → 轉換層（msf6> 解析、變數填充、已知修正、自動重試）
-  3. 目標確認（顯示目標與測試數量，自動開始執行）
+  1. 載入 JSON 指令庫 → 轉換層（msf6> 解析、變數填充、已知修正、自動重試）
+  2. 前置檢查（工具缺失 → 自動安裝，獨立 preflight.log；於詢問目標前完成）
+  3. 詢問目標 IP（互動提示或管線輸入）→ 顯示目標與測試數量，自動開始執行
   4. nmap 偵測開啟 port（TCP top-1000∪表格埠∪web埠；UDP 表格內定點掃）
   5. 依 JSON 指令庫派發測試（--jobs 並行）
   6. 每測試判讀 PASS / WARN / RISK / FAIL / SKIP（每 port 關鍵字表）
-  7. 產出 runs/<時間戳>_<IP>/ { scan.log, results.json, summary.txt, raw/*.txt }
+  7. 產出 runs/<時間戳>_<IP>/ { scan.log, results.json, summary.txt, raw/*.txt, PNG/ }
 
 用法：
   python3 scan_ip.py <IP> [--passwords FILE] [--userlist FILE] [--jobs N]
@@ -625,7 +625,8 @@ def _sudo_cmd(cmd):
 
 def _run_install_cmd(cmd, timeout=600):
     print("[install] $ %s" % " ".join(cmd), flush=True)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                       stdin=subprocess.DEVNULL)
     if r.stdout.strip():
         print("[install]   " + r.stdout.strip()[-500:], flush=True)
     if r.stderr.strip():
@@ -802,7 +803,7 @@ def preflight(no_install, log_path):
             ", ".join(apt_missing), ", ".join(sorted(pkgs)) or "無對應套件"))
         try:
             r = subprocess.run(_sudo_cmd(["apt-get", "update", "-qq"]), capture_output=True,
-                               text=True, timeout=180)
+                               text=True, timeout=180, stdin=subprocess.DEVNULL)
             log_line(log_path, "apt-get update 結束 code=%d" % r.returncode)
         except subprocess.TimeoutExpired:
             log_line(log_path, "apt-get update 逾時，續行安裝（可能失敗）")
@@ -815,7 +816,8 @@ def preflight(no_install, log_path):
                     continue
                 try:
                     r = subprocess.run(_sudo_cmd(["apt-get", "install", "-y", pkg]),
-                                       capture_output=True, text=True, timeout=300)
+                                       capture_output=True, text=True, timeout=300,
+                                       stdin=subprocess.DEVNULL)
                     if r.returncode == 0:
                         log_line(log_path, "已安裝套件: %s（%s）" % (pkg, b))
                         break
@@ -1581,6 +1583,26 @@ def main():
         ok = dry_run(args.table, dry_dir, args.no_exploit)
         sys.exit(0 if ok else 1)
 
+    # 密碼/帳號清單存在性檢查（fail-fast，不需目標）
+    passwords = os.path.abspath(args.passwords)
+    userlist = os.path.abspath(args.userlist)
+    for f, label in ((passwords, "密碼檔"), (userlist, "帳號清單")):
+        if not os.path.isfile(f):
+            print("錯誤: %s %s 不存在" % (label, f))
+            sys.exit(1)
+
+    # 指令庫載入（fail-fast：壞庫不浪費安裝時間）
+    _, groups = load_library(args.table)
+
+    # 工具檢查 + 自動安裝（於詢問目標 IP 之前完成；獨立 preflight.log）
+    out_root = Path(args.out)
+    out_root.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    preflight_log = out_root / ("%s_preflight.log" % ts)
+    log_line(preflight_log, "=== 工具檢查開始 時間=%s ===" % datetime.now().isoformat(timespec="seconds"))
+    missing_bins = preflight(args.no_install, preflight_log)
+    log_line(preflight_log, "=== 工具檢查完成 時間=%s ===" % datetime.now().isoformat(timespec="seconds"))
+
     if not args.ip:
         if sys.stdin.isatty():
             # 互動模式：提示輸入目標
@@ -1608,19 +1630,8 @@ def main():
         print("錯誤: 目標 %r 含非法字元（僅允許 IP 或主機名）" % ip)
         sys.exit(1)
     args.ip = ip
-    passwords = os.path.abspath(args.passwords)
-    userlist = os.path.abspath(args.userlist)
-    for f, label in ((passwords, "密碼檔"), (userlist, "帳號清單")):
-        if not os.path.isfile(f):
-            print("錯誤: %s %s 不存在" % (label, f))
-            sys.exit(1)
-
-    data, groups = load_library(args.table)
     gentle = args.gentle
 
-    out_root = Path(args.out)
-    out_root.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = out_root / ("%s_%s" % (ts, ip))
     (out_dir / "raw").mkdir(parents=True)
     log_path = out_dir / "scan.log"
@@ -1631,8 +1642,12 @@ def main():
         "跳過（--no-exploit）" if args.no_exploit else "執行",
         os.path.basename(userlist), os.path.basename(passwords)))
 
-    # 1. 前置檢查
-    missing_bins = preflight(args.no_install, log_path)
+    # 1. 前置檢查（已於目標輸入前完成，詳見 preflight.log）
+    log_line(log_path, "=== 工具檢查摘要（詳見 %s）===" % preflight_log.name)
+    if missing_bins:
+        log_line(log_path, "仍缺失: %s（相關測試 SKIP）" % ", ".join(sorted(missing_bins)))
+    else:
+        log_line(log_path, "工具檢查: 全部齊全")
 
     # 2. 掃描
     open_ports, services = scan_ports(ip, log_path, args.full_port, groups)

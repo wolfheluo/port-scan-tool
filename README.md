@@ -10,12 +10,8 @@ trail for subsequent offline analysis.
 
 ## Workflow
 
-1. **Preflight** — verifies required binaries; missing tools are installed
-   automatically via `apt-get install` (skippable with `--no-install`). Tests
-   whose binary remains unavailable (e.g. Kali-only tools) are skipped and
-   logged as `SKIP`.
-2. **Library loading & conversion** — loads the JSON command library and
-   applies a conversion layer:
+1. **Library loading & conversion** — loads the JSON command library (fail-fast
+   if missing) and applies a conversion layer:
    - `msf6>` prefixes are parsed into `msfconsole -q -x` invocations.
    - Placeholders (`{IP}`, `{PORT}`, `{DOMAIN}`, `{USER}`, `{PASSWORD}`,
      `{USERLIST}`, `{PASSWORDS}`, `{PATH}`) are filled at runtime.
@@ -23,15 +19,24 @@ trail for subsequent offline analysis.
      "表格原文 vs 修正後").
    - msf modules that fail to load are retried with automatic fixes
      (`auxiliary/` prefix, common misspellings).
-3. **Scanning** — `nmap -Pn -sT -T4` enumerates TCP ports
+2. **Preflight (before target input)** — verifies required binaries; missing
+   tools are installed automatically via `apt-get install` (skippable with
+   `--no-install`), logged to a dedicated `runs/<ts>_preflight.log`. Tests
+   whose binary remains unavailable (e.g. Kali-only tools) are skipped and
+   logged as `SKIP`. Runs before the target IP is requested, so the slow
+   tool-setup phase never blocks the scan itself.
+3. **Target input** — interactive prompt (tty) or pipe (`echo IP | ...`),
+   then the target is displayed with the planned test count and execution
+   starts automatically.
+4. **Scanning** — `nmap -Pn -sT -T4` enumerates TCP ports
    (top-1000 ∪ table ports ∪ web ports; `--full-port` switches to `-p-`).
    UDP ports referenced by the library (`-sU` commands) are probed
    point-targeted. Ports outside the table are fingerprinted with
    `nmap -sV --version-light` and recorded as "open with no matching test".
-4. **Execution** — tests are dispatched per open port with configurable
+5. **Execution** — tests are dispatched per open port with configurable
    parallelism (`--jobs 4` by default). Every log line carries an
    `[HH:MM:SS][port][test]` prefix for post-hoc correlation.
-5. **Grading** — each test is classified by a per-port keyword table:
+6. **Grading** — each test is classified by a per-port keyword table:
    - `RISK` — security-relevant finding (e.g. HTTP TRACE enabled, anonymous
      FTP, SMBv1, weak TLS, unauthenticated Redis PONG, MS17-010).
    - `WARN` — informational exposure (banner, version, user enumeration).
@@ -40,12 +45,12 @@ trail for subsequent offline analysis.
      missing script/module).
    - `SKIP` — test not executed (exploit module, missing tool, no PTR
      reverse for `{DOMAIN}`, GUI tool in headless environment).
-6. **Artifacts** — written to `runs/<YYYYMMDD_HHMMSS>_<IP>/`:
+7. **Artifacts** — written to `runs/<YYYYMMDD_HHMMSS>_<IP>/`:
    - `scan.log` — chronological audit trail of every command and outcome.
    - `results.json` — structured machine-readable results.
    - `summary.txt` — human-readable summary (RISK/WARN/FAIL/SKIP lists).
    - `raw/<port>_<test>.txt` — full raw output of each test (evidence).
-7. **PNG export (automatic)** — every `.txt` artifact (summary, scan.log,
+8. **PNG export (automatic)** — every `.txt` artifact (summary, scan.log,
    and all raw outputs, structure preserved) is rendered to
    `PNG/` as dark-theme images (black background, Kali-green command
    lines). Requires Pillow (auto-installed via pip on first use) and a
